@@ -1,0 +1,19 @@
+{
+  "defaultQuery": "AI Engineer",
+  "defaultLocation": "Germany",
+  "jobStoreMode": "local",
+  "cronEnabled": true,
+  "lastCronRunAt": null,
+  "lastCronResult": null,
+  "apiKeys": {
+    "apify": "",
+    "hunter": "",
+    "openai": "",
+    "searxng": "",
+    "googleSheetsId": "",
+    "googleServiceAccount": "",
+    "cronSecret": "",
+    "gmailClientId": "",
+    "gmailClientSecret": ""
+  }
+}
