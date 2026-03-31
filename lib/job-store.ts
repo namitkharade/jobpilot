@@ -18,7 +18,14 @@ function getStoreMode(): JobStoreMode {
 
   const configValue = getConfig().jobStoreMode;
   if (configValue === "local" || configValue === "sheets" || configValue === "hybrid") {
+    if (process.env.VERCEL === "1" && configValue === "local" && hasSheetsConfigured()) {
+      return "sheets";
+    }
     return configValue;
+  }
+
+  if (process.env.VERCEL === "1" && hasSheetsConfigured()) {
+    return "sheets";
   }
 
   return "local";

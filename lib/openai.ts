@@ -65,6 +65,9 @@ export function extractResumeText(latexSource: string): string {
 
 /** Resume caching logic */
 export function getResumeCachePath() {
+  if (process.env.VERCEL === "1") {
+    return path.join("/tmp", ".resume-cache.json");
+  }
   return path.join(process.cwd(), ".resume-cache.json");
 }
 

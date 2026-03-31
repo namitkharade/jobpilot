@@ -7,7 +7,14 @@ interface JobsDbFile {
   jobs: JobListing[];
 }
 
-const JOBS_DB_PATH = path.join(process.cwd(), "jobs-db.json");
+function getJobsDbPath(): string {
+  if (process.env.VERCEL === "1") {
+    return path.join("/tmp", "jobs-db.json");
+  }
+  return path.join(process.cwd(), "jobs-db.json");
+}
+
+const JOBS_DB_PATH = getJobsDbPath();
 
 function readDb(): JobsDbFile {
   try {

@@ -32,8 +32,21 @@ export interface CronRunLog {
   errors: string[];
 }
 
-const CONFIG_PATH = path.join(process.cwd(), "config.json");
-const LOGS_PATH = path.join(process.cwd(), "logs.json");
+function getWritableDataPath(fileName: string): string {
+  if (process.env.VERCEL === "1") {
+    return path.join("/tmp", fileName);
+  }
+  return path.join(process.cwd(), fileName);
+}
+
+const CONFIG_PATH = getWritableDataPath("config.json");
+const LOGS_PATH = getWritableDataPath("logs.json");
+
+function sanitizeSecret(value: unknown): string {
+  if (typeof value !== "string") return "";
+  // Remove control characters that can break HTTP headers and auth tokens.
+  return value.replace(/[\r\n\t]/g, "").trim();
+}
 
 const DEFAULT_CONFIG: AppConfig = {
   defaultQuery: "Software Engineer",
@@ -86,27 +99,44 @@ function normalizeJobStoreMode(value: unknown): AppConfig["jobStoreMode"] {
   return "local";
 }
 
+function inferDefaultJobStoreMode(config: Pick<AppConfig, "apiKeys">): AppConfig["jobStoreMode"] {
+  const hasSheets = Boolean(config.apiKeys.googleSheetsId && config.apiKeys.googleServiceAccount);
+  if (process.env.VERCEL === "1" && hasSheets) {
+    return "sheets";
+  }
+  return "local";
+}
+
 export function getConfig(): AppConfig {
   const loaded = readJsonFile<AppConfig>(CONFIG_PATH, DEFAULT_CONFIG);
+  const envMode = process.env.JOB_STORE_MODE;
+  const loadedMode = loaded.jobStoreMode;
+  const mergedApiKeys: AppConfig["apiKeys"] = {
+    ...DEFAULT_CONFIG.apiKeys,
+    ...(loaded.apiKeys || {}),
+    // Priorities go to environment variables first, then JSON structure
+    apify: sanitizeSecret(process.env.APIFY_API_TOKEN || loaded.apiKeys?.apify || ""),
+    hunter: sanitizeSecret(process.env.HUNTER_API_KEY || loaded.apiKeys?.hunter || ""),
+    openai: sanitizeSecret(process.env.OPENAI_API_KEY || loaded.apiKeys?.openai || ""),
+    searxng: sanitizeSecret(process.env.SEARXNG_URL || loaded.apiKeys?.searxng || ""),
+    googleSheetsId: sanitizeSecret(process.env.GOOGLE_SHEETS_ID || loaded.apiKeys?.googleSheetsId || ""),
+    googleServiceAccount: sanitizeSecret(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || loaded.apiKeys?.googleServiceAccount || ""),
+    cronSecret: sanitizeSecret(process.env.CRON_SECRET || loaded.apiKeys?.cronSecret || ""),
+    gmailClientId: sanitizeSecret(process.env.GMAIL_CLIENT_ID || loaded.apiKeys?.gmailClientId || ""),
+    gmailClientSecret: sanitizeSecret(process.env.GMAIL_CLIENT_SECRET || loaded.apiKeys?.gmailClientSecret || ""),
+  };
+
+  const resolvedMode = envMode
+    ? normalizeJobStoreMode(envMode)
+    : loadedMode
+      ? normalizeJobStoreMode(loadedMode)
+      : inferDefaultJobStoreMode({ apiKeys: mergedApiKeys });
   
   const merged: AppConfig = {
     ...DEFAULT_CONFIG,
     ...loaded,
-    jobStoreMode: normalizeJobStoreMode(process.env.JOB_STORE_MODE || loaded.jobStoreMode || DEFAULT_CONFIG.jobStoreMode),
-    apiKeys: {
-      ...DEFAULT_CONFIG.apiKeys,
-      ...(loaded.apiKeys || {}),
-      // Priorities go to environment variables first, then JSON structure
-      apify: process.env.APIFY_API_TOKEN || loaded.apiKeys?.apify || "",
-      hunter: process.env.HUNTER_API_KEY || loaded.apiKeys?.hunter || "",
-      openai: process.env.OPENAI_API_KEY || loaded.apiKeys?.openai || "",
-      searxng: process.env.SEARXNG_URL || loaded.apiKeys?.searxng || "",
-      googleSheetsId: process.env.GOOGLE_SHEETS_ID || loaded.apiKeys?.googleSheetsId || "",
-      googleServiceAccount: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || loaded.apiKeys?.googleServiceAccount || "",
-      cronSecret: process.env.CRON_SECRET || loaded.apiKeys?.cronSecret || "",
-      gmailClientId: process.env.GMAIL_CLIENT_ID || loaded.apiKeys?.gmailClientId || "",
-      gmailClientSecret: process.env.GMAIL_CLIENT_SECRET || loaded.apiKeys?.gmailClientSecret || "",
-    },
+    jobStoreMode: resolvedMode,
+    apiKeys: mergedApiKeys,
   };
 
   return merged;
@@ -114,13 +144,23 @@ export function getConfig(): AppConfig {
 
 export function saveConfig(next: Partial<AppConfig>) {
   const current = getConfig();
+  const nextApiKeys: Partial<AppConfig["apiKeys"]> = next.apiKeys || {};
   const merged: AppConfig = {
     ...current,
     ...next,
     jobStoreMode: normalizeJobStoreMode(next.jobStoreMode ?? current.jobStoreMode),
     apiKeys: {
       ...current.apiKeys,
-      ...(next.apiKeys || {}),
+      ...nextApiKeys,
+      apify: sanitizeSecret(nextApiKeys.apify ?? current.apiKeys.apify),
+      hunter: sanitizeSecret(nextApiKeys.hunter ?? current.apiKeys.hunter),
+      openai: sanitizeSecret(nextApiKeys.openai ?? current.apiKeys.openai),
+      searxng: sanitizeSecret(nextApiKeys.searxng ?? current.apiKeys.searxng),
+      googleSheetsId: sanitizeSecret(nextApiKeys.googleSheetsId ?? current.apiKeys.googleSheetsId),
+      googleServiceAccount: sanitizeSecret(nextApiKeys.googleServiceAccount ?? current.apiKeys.googleServiceAccount),
+      cronSecret: sanitizeSecret(nextApiKeys.cronSecret ?? current.apiKeys.cronSecret),
+      gmailClientId: sanitizeSecret(nextApiKeys.gmailClientId ?? current.apiKeys.gmailClientId),
+      gmailClientSecret: sanitizeSecret(nextApiKeys.gmailClientSecret ?? current.apiKeys.gmailClientSecret),
     },
   };
 
