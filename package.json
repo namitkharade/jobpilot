@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@node-latex-compiler/bin-win32-x64": "^1.0.5",
     "axios": "^1.13.6",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
@@ -31,5 +30,8 @@
     "eslint-config-next": "16.2.0",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "optionalDependencies": {
+    "@node-latex-compiler/bin-win32-x64": "^1.0.5"
   }
 }
