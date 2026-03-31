@@ -214,7 +214,7 @@ export default function JobDetailPage() {
       .then((res) => res.json() as Promise<ResumeStatusResponse>)
       .then((body) => {
         if (body.success && body.data?.text) {
-          setResumeSummary((body.data.text as string).slice(0, 500));
+          setResumeSummary((body.data.text as string).slice(0, 8000));
         }
       })
       .catch(() => {});

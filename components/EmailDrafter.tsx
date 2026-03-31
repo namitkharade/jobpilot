@@ -2,7 +2,7 @@
 
 import { useToast } from "@/components/ToastProvider";
 import { JobListing, RecruiterProfile } from "@/types";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface EmailDrafterProps {
   jobId: string;
@@ -20,6 +20,17 @@ interface EmailVariant {
   _tone?: string;
 }
 
+function detectVariantFromTitle(title: string): "recruiter" | "hiring-manager" | "department-head" {
+  const normalized = title.toLowerCase();
+  if (normalized.includes("head") || normalized.includes("vp") || normalized.includes("chief")) {
+    return "department-head";
+  }
+  if (normalized.includes("manager") || normalized.includes("director")) {
+    return "hiring-manager";
+  }
+  return "recruiter";
+}
+
 export default function EmailDrafter({
   jobId,
   recruiter,
@@ -28,21 +39,24 @@ export default function EmailDrafter({
 }: EmailDrafterProps) {
   const { toast } = useToast();
   const TONES = ["professional", "conversational", "direct"] as const;
+  const RECIPIENT_VARIANTS = ["recruiter", "hiring-manager", "department-head"] as const;
   type Tone = (typeof TONES)[number];
+  type RecipientVariant = (typeof RECIPIENT_VARIANTS)[number];
+
   const [tone, setTone] = useState<Tone>("professional");
+  const [variantType, setVariantType] = useState<RecipientVariant>(detectVariantFromTitle(recruiter.title || ""));
   const [variants, setVariants] = useState<EmailVariant[]>([]);
   const [loading, setLoading] = useState(false);
-  const [editingIndex, setEditingIndex] = useState<number | null>(null);
-  const [sentStatus, setSentStatus] = useState<Record<number, boolean>>({});
+  const [editingTone, setEditingTone] = useState<Tone | null>(null);
+  const [sentStatus, setSentStatus] = useState<Record<string, boolean>>({});
 
-  const generateEmails = async (selectedTone: string) => {
+  useEffect(() => {
+    setVariantType(detectVariantFromTitle(recruiter.title || ""));
+  }, [recruiter.title]);
+
+  const generateEmails = async (selectedTone: Tone) => {
     setLoading(true);
     try {
-      // The instructions say variant: 'recruiter' | 'hiring-manager' | 'department-head'
-      let variantType = "recruiter";
-      if (recruiter.title.toLowerCase().includes("manager") || recruiter.title.toLowerCase().includes("director")) variantType = "hiring-manager";
-      if (recruiter.title.toLowerCase().includes("head") || recruiter.title.toLowerCase().includes("vp") || recruiter.title.toLowerCase().includes("chief")) variantType = "department-head";
-
       const res = await fetch("/api/email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -58,7 +72,7 @@ export default function EmailDrafter({
       const data = await res.json();
       if (data.success) {
         setVariants(data.data);
-        setEditingIndex(null);
+        setEditingTone(null);
         toast("Email drafts ready", "success");
       } else {
         toast(data.error || "Failed to generate emails", "error");
@@ -71,19 +85,23 @@ export default function EmailDrafter({
     }
   };
 
-  const handleToneChange = (newTone: typeof tone) => {
+  const handleToneChange = (newTone: Tone) => {
     setTone(newTone);
-    generateEmails(newTone);
   };
+
+  const activeVariant = useMemo(
+    () => variants.find((item) => item._tone === tone) || variants[0] || null,
+    [tone, variants]
+  );
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
     toast("Email copied", "success");
   };
 
-  const handleSendStatus = async (index: number) => {
-    const isSent = !sentStatus[index];
-    setSentStatus((prev) => ({ ...prev, [index]: isSent }));
+  const handleSendStatus = async (toneKey: string) => {
+    const isSent = !sentStatus[toneKey];
+    setSentStatus((prev) => ({ ...prev, [toneKey]: isSent }));
 
     if (isSent) {
       try {
@@ -99,8 +117,10 @@ export default function EmailDrafter({
     }
   };
 
-  const updateBody = (index: number, newBody: string) => {
+  const updateBody = (toneKey: string, newBody: string) => {
     const newVariants = [...variants];
+    const index = newVariants.findIndex((item) => item._tone === toneKey);
+    if (index === -1) return;
     newVariants[index].body = newBody;
     newVariants[index].wordCount = newBody.split(" ").filter(Boolean).length;
     setVariants(newVariants);
@@ -123,80 +143,98 @@ export default function EmailDrafter({
         )}
       </div>
 
-      {!variants.length && (
-        <button
-          onClick={() => generateEmails(tone)}
-          disabled={loading}
-          className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold transition shadow-lg shadow-blue-500/20"
-        >
-          {loading ? "Drafting Emails..." : "Generate Email Variants"}
-        </button>
-      )}
+      <div className="space-y-3 mb-4">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-zinc-400">Recipient Type:</span>
+          <select
+            value={variantType}
+            onChange={(event) => setVariantType(event.target.value as RecipientVariant)}
+            className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-100"
+          >
+            {RECIPIENT_VARIANTS.map((variant) => (
+              <option key={variant} value={variant}>
+                {variant}
+              </option>
+            ))}
+          </select>
+        </div>
+        {!variants.length && (
+          <button
+            onClick={() => generateEmails(tone)}
+            disabled={loading}
+            className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold transition shadow-lg shadow-blue-500/20"
+          >
+            {loading ? "Drafting Emails..." : "Generate Email Variants"}
+          </button>
+        )}
+      </div>
 
       {variants.length > 0 && (
-        <div className="flex items-center gap-6 mb-4">
-          <span className="text-sm font-medium text-zinc-400">Tone:</span>
-          {TONES.map((t) => (
-            <label key={t} className="flex items-center gap-2 text-sm text-zinc-300 font-medium cursor-pointer">
-              <input
-                type="radio"
-                name="tone"
-                value={t}
-                checked={tone === t}
-                onChange={() => handleToneChange(t)}
-                className="w-4 h-4 text-blue-500 bg-zinc-800 border-zinc-700 focus:ring-blue-500"
-              />
-              <span className="capitalize">{t}</span>
-            </label>
-          ))}
+        <div className="space-y-3 mb-4">
+          <div className="flex items-center gap-2">
+            {TONES.map((t) => (
+              <button
+                key={t}
+                onClick={() => handleToneChange(t)}
+                className={`px-3 py-1.5 rounded-md text-sm capitalize border ${tone === t ? "bg-blue-600 text-white border-blue-500" : "bg-zinc-800 text-zinc-300 border-zinc-700"}`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
       {loading && variants.length > 0 && <span className="block text-sm text-blue-400">Regenerating with {tone} tone...</span>}
 
-      {variants.length > 0 && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {variants.map((variant, idx) => {
-            const mailtoLink = `mailto:${recruiter.email || ""}?subject=${encodeURIComponent(variant.subject)}&body=${encodeURIComponent(variant.body)}`;
+      {variants.length > 0 && activeVariant && (
+        <div className="grid grid-cols-1 gap-6">
+          {(() => {
+            const toneKey = (
+              activeVariant._tone && TONES.includes(activeVariant._tone as Tone)
+                ? activeVariant._tone
+                : tone
+            ) as Tone;
+            const mailtoLink = `mailto:${recruiter.email || ""}?subject=${encodeURIComponent(activeVariant.subject)}&body=${encodeURIComponent(activeVariant.body)}`;
             return (
-              <div key={idx} className={`rounded-xl border ${sentStatus[idx] ? "border-green-500/50 bg-green-900/10" : "border-zinc-700/60 bg-zinc-800/40"} p-5 flex flex-col shadow-sm`}>
+              <div key={toneKey} className={`rounded-xl border ${sentStatus[toneKey] ? "border-green-500/50 bg-green-900/10" : "border-zinc-700/60 bg-zinc-800/40"} p-5 flex flex-col shadow-sm`}>
                 <div className="flex justify-between items-start mb-3">
                   <div className="space-y-1">
                     <span className="inline-block px-2.5 py-0.5 rounded text-xs font-semibold bg-zinc-700 text-zinc-300 capitalize mr-2">
-                       {variant._tone || tone}
+                       {toneKey}
                     </span>
                     <span className="inline-block px-2.5 py-0.5 rounded text-xs font-semibold bg-indigo-900/50 text-indigo-300 capitalize border border-indigo-700/50">
-                       Hook: {variant.hookType?.replace("-", " ")}
+                       Hook: {activeVariant.hookType?.replace("-", " ")}
                     </span>
                   </div>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${variant.wordCount > 120 ? 'bg-red-900/50 text-red-300' : 'bg-zinc-700/50 text-zinc-400'}`}>
-                    {variant.wordCount} words
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${activeVariant.wordCount > 120 ? 'bg-red-900/50 text-red-300' : 'bg-zinc-700/50 text-zinc-400'}`}>
+                    {activeVariant.wordCount} words
                   </span>
                 </div>
 
                 <div className="mb-4">
                   <span className="text-xs text-zinc-500 font-semibold tracking-wider block mb-1">SUBJECT</span>
-                  <div className="font-medium text-white">{variant.subject}</div>
+                  <div className="font-medium text-white">{activeVariant.subject}</div>
                 </div>
 
                 <div className="mb-4 flex-grow">
                   <span className="text-xs text-zinc-500 font-semibold tracking-wider flex justify-between items-center mb-2">
                     BODY
                     <button
-                      onClick={() => setEditingIndex(editingIndex === idx ? null : idx)}
+                      onClick={() => setEditingTone(editingTone === toneKey ? null : toneKey)}
                       className="text-blue-400 hover:text-blue-300 transition-colors px-2 py-1 rounded bg-blue-900/20"
                     >
-                      {editingIndex === idx ? "Done" : "Edit Element"}
+                      {editingTone === toneKey ? "Done" : "Edit Element"}
                     </button>
                   </span>
-                  {editingIndex === idx ? (
+                  {editingTone === toneKey ? (
                     <textarea
-                      value={variant.body}
-                      onChange={(e) => updateBody(idx, e.target.value)}
+                      value={activeVariant.body}
+                      onChange={(e) => updateBody(toneKey, e.target.value)}
                       className="w-full h-40 bg-zinc-950/80 text-zinc-300 border border-zinc-700/80 rounded block p-3 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
                   ) : (
-                    <div className="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">{variant.body}</div>
+                    <div className="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">{activeVariant.body}</div>
                   )}
                 </div>
 
@@ -204,8 +242,8 @@ export default function EmailDrafter({
                   <label className="flex items-center gap-2 cursor-pointer text-sm text-zinc-300 group">
                     <input
                       type="checkbox"
-                      checked={!!sentStatus[idx]}
-                      onChange={() => handleSendStatus(idx)}
+                      checked={!!sentStatus[toneKey]}
+                      onChange={() => handleSendStatus(toneKey)}
                       className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-green-500 focus:ring-green-600 focus:ring-offset-zinc-800"
                     />
                     <span className="group-hover:text-white transition">Mark as Sent</span>
@@ -213,7 +251,7 @@ export default function EmailDrafter({
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleCopy(variant.body)}
+                      onClick={() => handleCopy(activeVariant.body)}
                       className="px-3 py-1.5 bg-zinc-700/60 hover:bg-zinc-600 text-zinc-200 text-xs font-medium rounded transition flex items-center gap-1.5"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
@@ -232,7 +270,7 @@ export default function EmailDrafter({
                 </div>
               </div>
             );
-          })}
+          })()}
         </div>
       )}
     </div>

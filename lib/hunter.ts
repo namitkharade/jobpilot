@@ -56,7 +56,26 @@ const DEPT_MAP: Record<string, HunterDepartment> = {
   it: "it",
 };
 
-const RECRUITER_KEYWORDS = ["recruiter", "talent", "acquisition", "staffing", "hiring", "sourcer"];
+const RECRUITER_KEYWORDS = [
+  "recruiter",
+  "talent",
+  "acquisition",
+  "staffing",
+  "hiring",
+  "sourcer",
+  "talent acquisition",
+  "ta lead",
+  "talent lead",
+  "talent manager",
+  "talent partner",
+  "people partner",
+  "people business partner",
+  "hr business partner",
+  "human resources business partner",
+  "people operations",
+  "people ops",
+  "human resources",
+];
 const MANAGER_KEYWORDS = ["manager", "director", "head of", "vp", "vice president", "lead", "principal"];
 
 const BASE_URL = "https://api.hunter.io/v2";
@@ -126,6 +145,7 @@ export async function findRecruitersAndManagers(
   name: string;
   email: string;
   title: string;
+  linkedinUrl: string;
   confidence: number;
   verified: boolean;
   contactType: "recruiter" | "hiring-manager";
@@ -178,10 +198,16 @@ export async function findRecruitersAndManagers(
           const verification = (entry.verification && typeof entry.verification === "object")
             ? (entry.verification as Record<string, unknown>)
             : {};
+          const linkedinUrl = typeof entry.linkedin === "string"
+            ? entry.linkedin
+            : typeof entry.linkedin_url === "string"
+              ? entry.linkedin_url
+              : "";
           return {
             name: `${firstName} ${lastName}`.trim(),
             email: typeof entry.value === "string" ? entry.value : "",
             title: positionRaw || position || "",
+            linkedinUrl,
             confidence: typeof entry.confidence === "number" ? entry.confidence : 0,
             verified: verification.status === "valid",
             contactType,
@@ -194,7 +220,7 @@ export async function findRecruitersAndManagers(
         .sort(
           (a, b) => Number(b.verified) - Number(a.verified) || b.confidence - a.confidence
         )
-        .slice(0, 2);
+        .slice(0, 6);
 
     const hrResults = parse(payloads[0], "recruiter");
     const deptResults = payloads.length > 1 ? parse(payloads[1], "hiring-manager") : [];
@@ -257,7 +283,7 @@ export async function lookupRecruiterEmail(
   // 3. Try findEmail
   if (firstName) {
     const directMatch = await findEmail(firstName, lastName, domain);
-    if (directMatch.email && directMatch.confidence >= 70) {
+    if (directMatch.email && directMatch.confidence >= 50) {
       return {
         email: directMatch.email,
         confidence: directMatch.confidence,
