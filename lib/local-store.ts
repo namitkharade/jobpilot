@@ -4,7 +4,7 @@ import path from "path";
 export interface AppConfig {
   defaultQuery: string;
   defaultLocation: string;
-  jobStoreMode: "local" | "sheets" | "hybrid";
+  jobStoreMode: "local" | "postgres";
   cronEnabled: boolean;
   lastCronRunAt: string | null;
   lastCronResult: "success" | "error" | "skipped" | null;
@@ -13,8 +13,6 @@ export interface AppConfig {
     hunter: string;
     openai: string;
     searxng: string;
-    googleSheetsId: string;
-    googleServiceAccount: string;
     cronSecret: string;
     gmailClientId: string;
     gmailClientSecret: string;
@@ -51,7 +49,7 @@ function sanitizeSecret(value: unknown): string {
 const DEFAULT_CONFIG: AppConfig = {
   defaultQuery: "Software Engineer",
   defaultLocation: "Remote",
-  jobStoreMode: "local",
+  jobStoreMode: "postgres",
   cronEnabled: true,
   lastCronRunAt: null,
   lastCronResult: null,
@@ -60,8 +58,6 @@ const DEFAULT_CONFIG: AppConfig = {
     hunter: "",
     openai: "",
     searxng: "",
-    googleSheetsId: "",
-    googleServiceAccount: "",
     cronSecret: "",
     gmailClientId: "",
     gmailClientSecret: "",
@@ -92,17 +88,19 @@ function writeJsonFile<T>(filePath: string, value: T) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
-function normalizeJobStoreMode(value: unknown): AppConfig["jobStoreMode"] {
-  if (value === "local" || value === "sheets" || value === "hybrid") {
-    return value;
-  }
-  return "local";
+function hasPostgresConnection() {
+  return Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL);
 }
 
-function inferDefaultJobStoreMode(config: Pick<AppConfig, "apiKeys">): AppConfig["jobStoreMode"] {
-  const hasSheets = Boolean(config.apiKeys.googleSheetsId && config.apiKeys.googleServiceAccount);
-  if (process.env.VERCEL === "1" && hasSheets) {
-    return "sheets";
+function normalizeJobStoreMode(value: unknown): AppConfig["jobStoreMode"] {
+  if (value === "local") return "local";
+  if (value === "postgres" || value === "sheets" || value === "hybrid") return "postgres";
+  return "postgres";
+}
+
+function inferDefaultJobStoreMode(): AppConfig["jobStoreMode"] {
+  if (hasPostgresConnection()) {
+    return "postgres";
   }
   return "local";
 }
@@ -119,8 +117,6 @@ export function getConfig(): AppConfig {
     hunter: sanitizeSecret(process.env.HUNTER_API_KEY || loaded.apiKeys?.hunter || ""),
     openai: sanitizeSecret(process.env.OPENAI_API_KEY || loaded.apiKeys?.openai || ""),
     searxng: sanitizeSecret(process.env.SEARXNG_URL || loaded.apiKeys?.searxng || ""),
-    googleSheetsId: sanitizeSecret(process.env.GOOGLE_SHEETS_ID || loaded.apiKeys?.googleSheetsId || ""),
-    googleServiceAccount: sanitizeSecret(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || loaded.apiKeys?.googleServiceAccount || ""),
     cronSecret: sanitizeSecret(process.env.CRON_SECRET || loaded.apiKeys?.cronSecret || ""),
     gmailClientId: sanitizeSecret(process.env.GMAIL_CLIENT_ID || loaded.apiKeys?.gmailClientId || ""),
     gmailClientSecret: sanitizeSecret(process.env.GMAIL_CLIENT_SECRET || loaded.apiKeys?.gmailClientSecret || ""),
@@ -130,7 +126,7 @@ export function getConfig(): AppConfig {
     ? normalizeJobStoreMode(envMode)
     : loadedMode
       ? normalizeJobStoreMode(loadedMode)
-      : inferDefaultJobStoreMode({ apiKeys: mergedApiKeys });
+      : inferDefaultJobStoreMode();
   
   const merged: AppConfig = {
     ...DEFAULT_CONFIG,
@@ -156,8 +152,6 @@ export function saveConfig(next: Partial<AppConfig>) {
       hunter: sanitizeSecret(nextApiKeys.hunter ?? current.apiKeys.hunter),
       openai: sanitizeSecret(nextApiKeys.openai ?? current.apiKeys.openai),
       searxng: sanitizeSecret(nextApiKeys.searxng ?? current.apiKeys.searxng),
-      googleSheetsId: sanitizeSecret(nextApiKeys.googleSheetsId ?? current.apiKeys.googleSheetsId),
-      googleServiceAccount: sanitizeSecret(nextApiKeys.googleServiceAccount ?? current.apiKeys.googleServiceAccount),
       cronSecret: sanitizeSecret(nextApiKeys.cronSecret ?? current.apiKeys.cronSecret),
       gmailClientId: sanitizeSecret(nextApiKeys.gmailClientId ?? current.apiKeys.gmailClientId),
       gmailClientSecret: sanitizeSecret(nextApiKeys.gmailClientSecret ?? current.apiKeys.gmailClientSecret),
@@ -171,8 +165,6 @@ export function saveConfig(next: Partial<AppConfig>) {
     hunter: process.env.HUNTER_API_KEY ? "" : merged.apiKeys.hunter,
     openai: process.env.OPENAI_API_KEY ? "" : merged.apiKeys.openai,
     searxng: process.env.SEARXNG_URL ? "" : merged.apiKeys.searxng,
-    googleSheetsId: process.env.GOOGLE_SHEETS_ID ? "" : merged.apiKeys.googleSheetsId,
-    googleServiceAccount: process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? "" : merged.apiKeys.googleServiceAccount,
     cronSecret: process.env.CRON_SECRET ? "" : merged.apiKeys.cronSecret,
     gmailClientId: process.env.GMAIL_CLIENT_ID ? "" : merged.apiKeys.gmailClientId,
     gmailClientSecret: process.env.GMAIL_CLIENT_SECRET ? "" : merged.apiKeys.gmailClientSecret,

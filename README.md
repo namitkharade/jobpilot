@@ -29,9 +29,10 @@ npm install
 ```bash
 OPENAI_API_KEY=
 APIFY_API_TOKEN=
+DATABASE_URL=
+# Optional fallback name if your provider gives POSTGRES_URL
+POSTGRES_URL=
 SEARXNG_URL=http://localhost:8080
-GOOGLE_SHEETS_ID=
-GOOGLE_SERVICE_ACCOUNT_JSON=
 
 # Optional: protect the entire app with basic auth
 BASIC_AUTH_USER=
@@ -46,33 +47,28 @@ npm run dev
 
 4. Open http://localhost:3000
 
-## Google Sheets Setup
+## Postgres Setup (Persistent)
 
-JobPilot stores scraped jobs in Google Sheets. Set it up once:
+JobPilot now uses PostgreSQL for permanent storage in local + deployed environments.
 
-1. Create a new Google Sheet and copy the Sheet ID from the URL.
-2. Create a Google Cloud project and enable the Google Sheets API.
-3. Create a Service Account and download the JSON key.
-4. Share the Sheet with the service account email (Editor access).
-5. Set these env vars:
+1. Create a managed Postgres database (Neon via Vercel Marketplace is the easiest path).
+2. Add the connection string to env:
 
 ```bash
-GOOGLE_SHEETS_ID=your_sheet_id
-GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"..."}
+DATABASE_URL=postgres://...
 ```
 
-Tip: For .env.local, put the JSON on a single line. If you paste a multiline JSON, replace newlines with \n.
+3. Migrate your existing local data once:
 
-Google Sheets is optional. JobPilot now supports three storage modes:
+```bash
+npm run migrate:local-to-postgres
+```
 
-- `local` (default): stores jobs in `jobs-db.json`
-- `sheets`: reads/writes jobs in Google Sheets only
-- `hybrid`: writes to local DB and attempts Sheets sync
+4. Deploy with the same `DATABASE_URL` in Vercel production env vars.
 
-Configure with either:
-
-- Settings page -> Default Search -> Storage mode
-- `JOB_STORE_MODE=local|sheets|hybrid` in `.env.local`
+Notes:
+- If `DATABASE_URL`/`POSTGRES_URL` is missing, JobPilot falls back to local `jobs-db.json`.
+- Legacy `JOB_STORE_MODE=sheets|hybrid` values are mapped to `postgres`.
 
 ## Cron Automation
 

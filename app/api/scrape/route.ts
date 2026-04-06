@@ -73,7 +73,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2. Persist to configured job store (local/sheets/hybrid)
+    // 2. Persist to configured job store (postgres/local fallback)
     let newJobObjects: JobListing[] = [];
     try {
       newJobObjects = await appendJobs(scrapedJobs);

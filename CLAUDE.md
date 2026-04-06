@@ -18,12 +18,9 @@ npm run lint     # Run ESLint
 ## Architecture
 
 ### Storage Layer (`lib/job-store.ts`)
-Jobs are stored in one of three modes, configurable via `JOB_STORE_MODE` env var or Settings page:
-- `local`: jobs-db.json file (default, local only)
-- `sheets`: Google Sheets only (requires Google Sheets API setup)
-- `hybrid`: local file + Sheets sync (Vercel auto-falls back to sheets if configured)
-
-On Vercel, if `local` mode is set but Google Sheets is configured, it automatically uses `sheets` mode.
+Jobs are stored in PostgreSQL when `DATABASE_URL` (or `POSTGRES_URL`) is configured.
+- `postgres` (default): shared persistent DB for local + deployed environments
+- `local` fallback: uses `jobs-db.json` only when no Postgres connection string is available
 
 ### Key API Routes (`app/api/`)
 - `/api/scrape` - Job scraping via Apify actors (LinkedIn/Indeed)
@@ -41,7 +38,7 @@ On Vercel, if `local` mode is set but Google Sheets is configured, it automatica
 - **OpenAI**: GPT-4o for ATS scoring, email drafting, resume tailoring
 - **SearXNG**: Free metasearch for recruiter research (uses public instances or custom `SEARXNG_URL`)
 - **Hunter.io**: Email finding API for recruiters
-- **Google Sheets**: Optional job storage (requires service account JSON)
+- **PostgreSQL (Neon recommended)**: Persistent job storage
 
 ### Frontend Structure
 - `app/page.tsx` - Main dashboard with job table, ATS panel, recruiter outreach
@@ -61,7 +58,7 @@ On Vercel, if `local` mode is set but Google Sheets is configured, it automatica
 |------|---------|
 | `lib/apify.ts` | Apify actor calls for LinkedIn/Indeed scraping |
 | `lib/openai.ts` | OpenAI GPT-4o calls, resume cache management |
-| `lib/sheets.ts` | Google Sheets API integration |
+| `lib/postgres.ts` | PostgreSQL job storage integration |
 | `lib/hunter.ts` | Hunter.io email finding |
 | `lib/searxng.ts` | SearXNG metasearch for recruiter research |
 | `types/index.ts` | TypeScript types for JobListing, ATS results, etc. |
@@ -72,7 +69,7 @@ Required for full functionality:
 - `OPENAI_API_KEY` - ATS scoring, email generation
 - `APIFY_API_TOKEN` - Job scraping
 - `HUNTER_API_KEY` - Email finding
-- `GOOGLE_SHEETS_ID` + `GOOGLE_SERVICE_ACCOUNT_JSON` - Sheets storage (optional)
+- `DATABASE_URL` (or `POSTGRES_URL`) - Persistent PostgreSQL storage
 - `SEARXNG_URL` - Custom SearXNG instance (optional, uses public fallbacks)
 - `CRON_SECRET` - Protect manual cron triggers (optional)
 - `BASIC_AUTH_USER` + `BASIC_AUTH_PASSWORD` - App-wide basic auth (optional)

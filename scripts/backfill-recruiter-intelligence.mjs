@@ -2,42 +2,8 @@ import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
 
-import { google } from "googleapis";
-
 const cwd = process.cwd();
 const jobsDbPath = process.env.VERCEL === "1" ? "/tmp/jobs-db.json" : path.join(cwd, "jobs-db.json");
-const configPath = process.env.VERCEL === "1" ? "/tmp/config.json" : path.join(cwd, "config.json");
-
-const CANONICAL_HEADERS = [
-  "id",
-  "title",
-  "company",
-  "location",
-  "salary",
-  "jobType",
-  "source",
-  "postedAt",
-  "scrapedAt",
-  "applyUrl",
-  "status",
-  "atsScore",
-  "recruiterName",
-  "recruiterEmail",
-  "recruiterProfileUrl",
-  "jobDescription",
-  "atsKeywordGaps",
-  "atsSuggestions",
-  "companyDescription",
-  "recruiterTitle",
-  "emailDraft",
-  "jobPosterName",
-  "jobPosterTitle",
-  "companyDomain",
-  "companyIntel",
-  "recruiterCandidates",
-  "selectedRecruiterId",
-  "outreach",
-];
 
 function readJson(filePath, fallback) {
   try {
@@ -228,91 +194,9 @@ async function backfillLocalDb() {
   return jobs.length;
 }
 
-function getConfig() {
-  return readJson(configPath, { apiKeys: {} });
-}
-
-function getGoogleConfig() {
-  const config = getConfig();
-  return {
-    serviceAccount: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || config.apiKeys?.googleServiceAccount || "",
-    sheetsId: process.env.GOOGLE_SHEETS_ID || config.apiKeys?.googleSheetsId || "",
-  };
-}
-
-function toColumnName(index) {
-  let n = index;
-  let name = "";
-  while (n > 0) {
-    const rem = (n - 1) % 26;
-    name = String.fromCharCode(65 + rem) + name;
-    n = Math.floor((n - 1) / 26);
-  }
-  return name;
-}
-
-async function backfillSheets() {
-  const { serviceAccount, sheetsId } = getGoogleConfig();
-  if (!serviceAccount || !sheetsId) return 0;
-
-  const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(serviceAccount),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-  const sheets = google.sheets({ version: "v4", auth });
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: sheetsId,
-    range: "A:ZZ",
-  });
-
-  const rows = Array.isArray(response.data.values) ? response.data.values : [];
-  const currentHeaders = rows[0] || [];
-  const headers = [...currentHeaders];
-  CANONICAL_HEADERS.forEach((header) => {
-    if (!headers.includes(header)) headers.push(header);
-  });
-
-  if (headers.length !== currentHeaders.length) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: sheetsId,
-      range: `A1:${toColumnName(headers.length)}1`,
-      valueInputOption: "RAW",
-      requestBody: { values: [headers] },
-    });
-  }
-
-  const headerMap = Object.fromEntries(headers.map((header, index) => [header, index]));
-  let updatedRows = 0;
-
-  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex];
-    const record = Object.fromEntries(headers.map((header) => [header, row[headerMap[header]] || ""]));
-    const nextJob = backfillJob(record);
-    const values = headers.map((header) => {
-      const value = nextJob[header];
-      if (header === "companyIntel" || header === "outreach") return value ? JSON.stringify(value) : "";
-      if (header === "recruiterCandidates") return JSON.stringify(value || []);
-      if (header === "atsSuggestions") return JSON.stringify(value || []);
-      if (header === "atsKeywordGaps") return Array.isArray(value) ? value.join(",") : "";
-      return value ?? "";
-    });
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: sheetsId,
-      range: `A${rowIndex + 1}:${toColumnName(headers.length)}${rowIndex + 1}`,
-      valueInputOption: "RAW",
-      requestBody: { values: [values] },
-    });
-    updatedRows += 1;
-  }
-
-  return updatedRows;
-}
-
 async function main() {
   const localCount = await backfillLocalDb();
-  const sheetCount = await backfillSheets();
-  console.log(`Backfilled recruiter intelligence for ${localCount} local jobs and ${sheetCount} sheet rows.`);
+  console.log(`Backfilled recruiter intelligence for ${localCount} local jobs.`);
 }
 
 main().catch((error) => {

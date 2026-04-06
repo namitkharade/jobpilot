@@ -1,7 +1,7 @@
 {
   "defaultQuery": "AI Engineer",
   "defaultLocation": "Germany",
-  "jobStoreMode": "local",
+  "jobStoreMode": "postgres",
   "cronEnabled": true,
   "lastCronRunAt": null,
   "lastCronResult": null,
@@ -10,8 +10,6 @@
     "hunter": "",
     "openai": "",
     "searxng": "",
-    "googleSheetsId": "",
-    "googleServiceAccount": "",
     "cronSecret": "",
     "gmailClientId": "",
     "gmailClientSecret": ""

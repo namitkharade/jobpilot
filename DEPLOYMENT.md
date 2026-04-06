@@ -14,8 +14,7 @@ Run the following commands and paste each value when prompted:
 vercel env add OPENAI_API_KEY production
 vercel env add APIFY_API_TOKEN production
 vercel env add HUNTER_API_KEY production
-vercel env add GOOGLE_SHEETS_ID production
-vercel env add GOOGLE_SERVICE_ACCOUNT_JSON production
+vercel env add DATABASE_URL production
 ```
 
 Optional (if you want a protected manual cron trigger policy):
@@ -58,3 +57,13 @@ After deploy, verify in the Vercel Dashboard:
 1. Project -> Settings -> Cron Jobs
 2. Confirm /api/cron appears and is active
 3. Trigger a manual run and inspect /api/cron/logs
+
+## 5) One-Time Data Migration (Local -> Postgres)
+
+Before switching fully to online usage, migrate local jobs:
+
+```bash
+npm run migrate:local-to-postgres
+```
+
+This reads `jobs-db.json` and upserts all rows into Postgres.

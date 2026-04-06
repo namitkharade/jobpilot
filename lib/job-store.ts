@@ -1,61 +1,58 @@
 import { JobListing } from "@/types";
 import { appendJobsToDb, deleteJobFromDb, getAllJobsFromDb, updateJobInDb } from "./jobs-db";
 import { getConfig } from "./local-store";
-import { appendJobs as appendJobsToSheets, deleteJob as deleteJobFromSheets, getAllJobs as getAllJobsFromSheets, updateJob as updateJobInSheets } from "./sheets";
+import {
+  appendJobsToPostgres,
+  deleteJobFromPostgres,
+  getAllJobsFromPostgres,
+  hasPostgresConfigured,
+  updateJobInPostgres,
+} from "./postgres";
 
-type JobStoreMode = "local" | "sheets" | "hybrid";
+type JobStoreMode = "local" | "postgres";
 
-function hasSheetsConfigured() {
-  const config = getConfig();
-  return Boolean(config.apiKeys.googleSheetsId && config.apiKeys.googleServiceAccount);
+let warnedMissingPostgres = false;
+
+function normalizeStoreMode(value: unknown): JobStoreMode {
+  if (value === "local") return "local";
+  if (value === "postgres" || value === "sheets" || value === "hybrid") return "postgres";
+  return "postgres";
 }
 
 function getStoreMode(): JobStoreMode {
-  const envValue = (process.env.JOB_STORE_MODE || "").toLowerCase();
-  if (envValue === "local" || envValue === "sheets" || envValue === "hybrid") {
+  const envValue = normalizeStoreMode((process.env.JOB_STORE_MODE || "").toLowerCase());
+  if (process.env.JOB_STORE_MODE) {
+    if (envValue === "postgres" && !hasPostgresConfigured()) {
+      if (!warnedMissingPostgres) {
+        console.warn("JOB_STORE_MODE=postgres but DATABASE_URL/POSTGRES_URL is missing. Falling back to local file storage.");
+        warnedMissingPostgres = true;
+      }
+      return "local";
+    }
     return envValue;
   }
 
-  const configValue = getConfig().jobStoreMode;
-  if (configValue === "local" || configValue === "sheets" || configValue === "hybrid") {
-    if (process.env.VERCEL === "1" && configValue === "local" && hasSheetsConfigured()) {
-      return "sheets";
+  if (hasPostgresConfigured()) {
+    return "postgres";
+  }
+
+  const configValue = normalizeStoreMode(getConfig().jobStoreMode);
+  if (configValue === "postgres") {
+    if (!warnedMissingPostgres) {
+      console.warn("Configured for postgres but DATABASE_URL/POSTGRES_URL is missing. Falling back to local file storage.");
+      warnedMissingPostgres = true;
     }
-    return configValue;
+    return "local";
   }
 
-  if (process.env.VERCEL === "1" && hasSheetsConfigured()) {
-    return "sheets";
-  }
-
-  return "local";
+  return configValue;
 }
 
 export async function getAllJobs(): Promise<JobListing[]> {
   const mode = getStoreMode();
 
-  if (mode === "sheets") {
-    if (!hasSheetsConfigured()) {
-      return getAllJobsFromDb();
-    }
-    return getAllJobsFromSheets();
-  }
-
-  if (mode === "hybrid") {
-    const localJobs = await getAllJobsFromDb();
-    if (localJobs.length > 0) {
-      return localJobs;
-    }
-
-    if (hasSheetsConfigured()) {
-      const sheetJobs = await getAllJobsFromSheets();
-      if (sheetJobs.length > 0) {
-        await appendJobsToDb(sheetJobs);
-      }
-      return sheetJobs;
-    }
-
-    return localJobs;
+  if (mode === "postgres") {
+    return getAllJobsFromPostgres();
   }
 
   return getAllJobsFromDb();
@@ -64,23 +61,8 @@ export async function getAllJobs(): Promise<JobListing[]> {
 export async function appendJobs(jobs: JobListing[]): Promise<JobListing[]> {
   const mode = getStoreMode();
 
-  if (mode === "sheets") {
-    if (!hasSheetsConfigured()) {
-      return appendJobsToDb(jobs);
-    }
-    return appendJobsToSheets(jobs);
-  }
-
-  if (mode === "hybrid") {
-    const localInserted = await appendJobsToDb(jobs);
-    if (hasSheetsConfigured()) {
-      try {
-        await appendJobsToSheets(localInserted);
-      } catch (error) {
-        console.warn("Sheets append failed in hybrid mode:", error);
-      }
-    }
-    return localInserted;
+  if (mode === "postgres") {
+    return appendJobsToPostgres(jobs);
   }
 
   return appendJobsToDb(jobs);
@@ -89,24 +71,8 @@ export async function appendJobs(jobs: JobListing[]): Promise<JobListing[]> {
 export async function updateJob(id: string, updates: Partial<JobListing>): Promise<void> {
   const mode = getStoreMode();
 
-  if (mode === "sheets") {
-    if (!hasSheetsConfigured()) {
-      await updateJobInDb(id, updates);
-      return;
-    }
-    await updateJobInSheets(id, updates);
-    return;
-  }
-
-  if (mode === "hybrid") {
-    await updateJobInDb(id, updates);
-    if (hasSheetsConfigured()) {
-      try {
-        await updateJobInSheets(id, updates);
-      } catch (error) {
-        console.warn("Sheets update failed in hybrid mode:", error);
-      }
-    }
+  if (mode === "postgres") {
+    await updateJobInPostgres(id, updates);
     return;
   }
 
@@ -116,24 +82,8 @@ export async function updateJob(id: string, updates: Partial<JobListing>): Promi
 export async function deleteJob(id: string): Promise<void> {
   const mode = getStoreMode();
 
-  if (mode === "sheets") {
-    if (!hasSheetsConfigured()) {
-      await deleteJobFromDb(id);
-      return;
-    }
-    await deleteJobFromSheets(id);
-    return;
-  }
-
-  if (mode === "hybrid") {
-    await deleteJobFromDb(id);
-    if (hasSheetsConfigured()) {
-      try {
-        await deleteJobFromSheets(id);
-      } catch (error) {
-        console.warn("Sheets delete failed in hybrid mode:", error);
-      }
-    }
+  if (mode === "postgres") {
+    await deleteJobFromPostgres(id);
     return;
   }
 

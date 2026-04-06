@@ -9,7 +9,7 @@ type TestState = "idle" | "loading" | "success" | "error";
 interface ConfigPayload {
   defaultQuery: string;
   defaultLocation: string;
-  jobStoreMode: "local" | "sheets" | "hybrid";
+  jobStoreMode: "local" | "postgres";
   cronEnabled: boolean;
   lastCronRunAt: string | null;
   lastCronResult: "success" | "error" | "skipped" | null;
@@ -18,8 +18,6 @@ interface ConfigPayload {
     hunterMasked: string;
     openaiMasked: string;
     searxngMasked: string;
-    googleSheetsIdMasked: string;
-    googleServiceAccountMasked: string;
     cronSecretMasked: string;
     gmailClientIdMasked: string;
     gmailClientSecretMasked: string;
@@ -31,7 +29,7 @@ export default function SettingsPage() {
 
   const [defaultQuery, setDefaultQuery] = useState("");
   const [defaultLocation, setDefaultLocation] = useState("");
-  const [jobStoreMode, setJobStoreMode] = useState<"local" | "sheets" | "hybrid">("local");
+  const [jobStoreMode, setJobStoreMode] = useState<"local" | "postgres">("postgres");
   const [cronEnabled, setCronEnabled] = useState(true);
   const [lastCronRunAt, setLastCronRunAt] = useState<string | null>(null);
   const [lastCronResult, setLastCronResult] = useState<string | null>(null);
@@ -78,7 +76,7 @@ export default function SettingsPage() {
       const config = configBody.data as ConfigPayload;
       setDefaultQuery(config.defaultQuery || "");
       setDefaultLocation(config.defaultLocation || "");
-      setJobStoreMode(config.jobStoreMode || "local");
+      setJobStoreMode(config.jobStoreMode || "postgres");
       setCronEnabled(Boolean(config.cronEnabled));
       setLastCronRunAt(config.lastCronRunAt || null);
       setLastCronResult(config.lastCronResult || null);
@@ -88,8 +86,6 @@ export default function SettingsPage() {
         hunter: config.apiKeys.hunterMasked,
         openai: config.apiKeys.openaiMasked,
         searxng: config.apiKeys.searxngMasked,
-        googlesheetsid: config.apiKeys.googleSheetsIdMasked,
-        googleserviceaccount: config.apiKeys.googleServiceAccountMasked,
         cronsecret: config.apiKeys.cronSecretMasked,
         gmailclientid: config.apiKeys.gmailClientIdMasked,
         gmailclientsecret: config.apiKeys.gmailClientSecretMasked,
@@ -272,15 +268,11 @@ export default function SettingsPage() {
             placeholder="Default location, e.g. Remote"
             className="h-10 rounded-md border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-900"
           />
-          <select
-            value={jobStoreMode}
-            onChange={(e) => setJobStoreMode(e.target.value as "local" | "sheets" | "hybrid")}
-            className="h-10 rounded-md border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-          >
-            <option value="local">Storage: Local DB</option>
-            <option value="sheets">Storage: Google Sheets</option>
-            <option value="hybrid">Storage: Hybrid (Local + Sheets)</option>
-          </select>
+          <div className="flex h-10 items-center rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+            {jobStoreMode === "postgres"
+              ? "Storage: PostgreSQL (persistent)"
+              : "Storage: Local file fallback (set DATABASE_URL to switch)"}
+          </div>
         </div>
         <button
           onClick={saveDefaults}
@@ -301,10 +293,8 @@ export default function SettingsPage() {
       </section>
 
       <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950 shadow-sm">
-        <h2 className="mb-3 text-sm font-semibold">Google Integration</h2>
+        <h2 className="mb-3 text-sm font-semibold">Gmail Integration</h2>
         <div className="space-y-4">
-          {renderKeyField("googlesheetsid", "Google Sheets ID", "Enter Google Sheets ID", false, false)}
-          {renderKeyField("googleserviceaccount", "Service Account JSON", "Paste Google Service Account JSON here", true, false)}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {renderKeyField("gmailclientid", "Gmail Client ID", "Enter Gmail Client ID", false, false)}
             {renderKeyField("gmailclientsecret", "Gmail Client Secret", "Enter Gmail Client Secret", false, false)}
