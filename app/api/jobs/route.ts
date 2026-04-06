@@ -1,4 +1,5 @@
 import { appendJobs, deleteJob, getAllJobs, updateJob } from "@/lib/job-store";
+import { normalizeJobListing } from "@/lib/job-normalize";
 import { JobListing } from "@/types";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -14,8 +15,11 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const job: JobListing = await req.json();
-    job.id = job.id || `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const rawJob = (await req.json()) as Partial<JobListing>;
+    const job = normalizeJobListing({
+      ...rawJob,
+      id: rawJob.id || `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    });
     await appendJobs([job]);
     return NextResponse.json({ success: true, data: job });
   } catch (error) {
@@ -26,9 +30,12 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
-    const job: JobListing = await req.json();
-    await updateJob(job.id, job);
-    return NextResponse.json({ success: true, data: job });
+    const updates = (await req.json()) as Partial<JobListing>;
+    if (!updates.id) {
+      return NextResponse.json({ success: false, error: "Missing job id" }, { status: 400 });
+    }
+    await updateJob(updates.id, updates);
+    return NextResponse.json({ success: true, data: updates });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update job";
     return NextResponse.json({ success: false, error: message }, { status: 500 });

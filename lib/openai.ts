@@ -12,6 +12,30 @@ export interface GPTMessage {
   content: string;
 }
 
+type WebSearchContextSize = "low" | "medium" | "high";
+type ResponseVerbosity = "low" | "medium" | "high";
+
+interface StructuredResponseOptions<T> {
+  schemaName: string;
+  schema: Record<string, unknown>;
+  instructions: string;
+  input: string;
+  model?: string;
+  description?: string;
+  webSearch?: boolean;
+  searchContextSize?: WebSearchContextSize;
+  verbosity?: ResponseVerbosity;
+  allowChatFallback?: boolean;
+  fallbackModel?: string;
+  fallbackExample?: T;
+}
+
+interface StructuredResponseResult<T> {
+  data: T;
+  outputText: string;
+  webSources: string[];
+}
+
 interface ResumeCacheData {
   resumeText: string;
   updatedAt: string;
@@ -21,20 +45,157 @@ interface ResumeCacheData {
   tailoredCoverLetters: Record<string, { text: string; updatedAt: string }>;
 }
 
+const DEFAULT_FAST_MODEL = "gpt-5.4-nano";
+const DEFAULT_DRAFT_MODEL = "gpt-5.4-mini";
+const DEFAULT_CHAT_FALLBACK_MODEL = "gpt-4o";
+
+function safeParseJson<T>(value: string): T | null {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function getConfiguredKey() {
+  const config = getConfig();
+  return config.apiKeys.openai;
+}
+
+export function getOpenAIClient() {
+  const apiKey = getConfiguredKey();
+
+  if (!apiKey) {
+    throw new Error("OpenAI API key is missing in configuration.");
+  }
+
+  return new OpenAI({ apiKey });
+}
+
+function extractWebSources(response: unknown): string[] {
+  const output = Array.isArray((response as { output?: unknown[] })?.output)
+    ? ((response as { output?: unknown[] }).output as unknown[])
+    : [];
+
+  const urls = new Set<string>();
+
+  output.forEach((item) => {
+    const record = item && typeof item === "object" ? (item as Record<string, unknown>) : null;
+    if (!record || record.type !== "web_search_call") return;
+
+    const action = record.action && typeof record.action === "object"
+      ? (record.action as Record<string, unknown>)
+      : null;
+    const sources = Array.isArray(action?.sources) ? (action?.sources as unknown[]) : [];
+
+    sources.forEach((source) => {
+      const sourceRecord = source && typeof source === "object" ? (source as Record<string, unknown>) : null;
+      const url = typeof sourceRecord?.url === "string" ? sourceRecord.url : "";
+      if (url) urls.add(url);
+    });
+  });
+
+  return Array.from(urls);
+}
+
+export function getOpenAIModel(tier: "fast" | "draft" = "fast") {
+  if (tier === "draft") {
+    return process.env.OPENAI_DRAFT_MODEL || DEFAULT_DRAFT_MODEL;
+  }
+  return process.env.OPENAI_FAST_MODEL || DEFAULT_FAST_MODEL;
+}
+
+export async function runStructuredResponse<T>(
+  options: StructuredResponseOptions<T>
+): Promise<StructuredResponseResult<T>> {
+  const client = getOpenAIClient();
+  const model = options.model || getOpenAIModel(options.webSearch ? "draft" : "fast");
+  const format = {
+    type: "json_schema" as const,
+    name: options.schemaName,
+    schema: options.schema,
+    strict: true,
+    description: options.description,
+  };
+
+  try {
+    const response = await client.responses.create({
+      model,
+      instructions: options.instructions,
+      input: options.input,
+      text: {
+        format,
+        verbosity: options.verbosity || "low",
+      },
+      include: options.webSearch ? ["web_search_call.action.sources"] : undefined,
+      tools: options.webSearch
+        ? [
+            {
+              type: "web_search_preview",
+              search_context_size: options.searchContextSize || "medium",
+              user_location: {
+                type: "approximate",
+                country: "DE",
+                region: "Berlin",
+                timezone: "Europe/Berlin",
+              },
+            },
+          ]
+        : undefined,
+    });
+
+    const outputText = typeof response.output_text === "string" ? response.output_text : "";
+    const parsed = safeParseJson<T>(outputText);
+    if (!parsed) {
+      throw new Error(`Failed to parse structured response for ${options.schemaName}`);
+    }
+
+    return {
+      data: parsed,
+      outputText,
+      webSources: extractWebSources(response),
+    };
+  } catch (error) {
+    if (options.webSearch || options.allowChatFallback === false) {
+      throw error;
+    }
+
+    const completion = await client.chat.completions.create({
+      model: options.fallbackModel || DEFAULT_CHAT_FALLBACK_MODEL,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `${options.instructions}\nReturn JSON only.`,
+        },
+        {
+          role: "user",
+          content: `${options.input}\n\nJSON schema:\n${JSON.stringify(options.schema, null, 2)}`,
+        },
+      ],
+    });
+
+    const outputText = completion.choices[0]?.message?.content ?? "";
+    const parsed = safeParseJson<T>(outputText);
+    if (!parsed) {
+      throw error;
+    }
+
+    return {
+      data: parsed,
+      outputText,
+      webSources: [],
+    };
+  }
+}
+
 /** Send a prompt to GPT and get the text response. */
 export async function askGPT(
   systemPrompt: string,
   userPrompt: string,
   maxTokens = 4096
 ): Promise<string> {
-  const config = getConfig();
-  const apiKey = config.apiKeys.openai;
-
-  if (!apiKey) {
-    throw new Error("OpenAI API key is missing in configuration.");
-  }
-
-  const client = new OpenAI({ apiKey });
+  const client = getOpenAIClient();
 
   const response = await client.chat.completions.create({
     model: "gpt-4o",

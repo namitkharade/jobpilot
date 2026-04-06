@@ -1,4 +1,3 @@
-// ─── Job Status ──────────────────────────────────────────
 export type JobStatus =
   | "saved"
   | "applied"
@@ -6,10 +5,8 @@ export type JobStatus =
   | "rejected"
   | "ghosted";
 
-// ─── Job Source ──────────────────────────────────────────
 export type JobSource = "linkedin" | "indeed";
 
-// ─── LinkedIn Time Range ───────────────────────────────
 export type LinkedInTimeRange =
   | "any"
   | "past_1h"
@@ -19,7 +16,147 @@ export type LinkedInTimeRange =
   | "past_2weeks"
   | "past_month";
 
-// ─── Job Listing ─────────────────────────────────────────
+export type ResearchSourceType =
+  | "legacy"
+  | "job-poster"
+  | "apply-url"
+  | "hunter"
+  | "openai-web"
+  | "searxng"
+  | "manual";
+
+export type RecruiterCandidateRole =
+  | "recruiter"
+  | "hiring-manager"
+  | "department-head"
+  | "job-poster"
+  | "legacy"
+  | "unknown";
+
+export type CandidateChannel = "email" | "linkedin";
+
+export type EmailVerificationStatus =
+  | "valid"
+  | "accept_all"
+  | "unknown"
+  | "unverified"
+  | "not_found";
+
+export type OutreachChannel = CandidateChannel | "blocked";
+
+export type OutreachStatus = "idle" | "researched" | "drafted" | "sent" | "blocked";
+
+export interface AtsSuggestion {
+  section: "summary" | "experience" | "skills" | "education";
+  bulletIndex: number;
+  original: string;
+  suggested: string;
+  reason: string;
+  keywordsAdded: string[];
+}
+
+export interface AtsResult {
+  score: number;
+  matchedKeywords: string[];
+  missingKeywords: string[];
+  suggestions: AtsSuggestion[];
+  scoreBreakdown: {
+    keywordMatch: number;
+    skillsAlignment: number;
+    experienceRelevance: number;
+    formatQuality: number;
+  };
+  topMissingSkills: string[];
+  summary: string;
+}
+
+export interface ResearchEvidence {
+  sourceType: ResearchSourceType;
+  url: string;
+  title: string;
+  snippet: string;
+  domain: string;
+  extractedOn: string;
+  lastSeenOn: string;
+  stillOnPage: boolean;
+}
+
+export interface CompanyIntel {
+  domain: string;
+  description: string;
+  industry: string;
+  size: string;
+  location: string;
+  signals: ResearchEvidence[];
+  updatedAt: string;
+}
+
+export interface RecruiterCandidate {
+  id: string;
+  name: string;
+  title: string;
+  role: RecruiterCandidateRole;
+  linkedinUrl: string;
+  linkedinHandle: string;
+  email: string;
+  emailVerificationStatus: EmailVerificationStatus;
+  emailConfidence: number;
+  domainPattern: string;
+  channelOptions: CandidateChannel[];
+  score: number;
+  reasons: string[];
+  sourceTypes: ResearchSourceType[];
+  sourceSummary: string;
+  evidence: ResearchEvidence[];
+}
+
+export interface OutreachDraft {
+  id: string;
+  candidateId: string;
+  channel: CandidateChannel;
+  tone: "professional" | "conversational" | "direct";
+  subject: string;
+  body: string;
+  wordCount: number;
+  hookType: string;
+  cta: string;
+  groundingUrls: string[];
+  generatedAt: string;
+  sentAt: string | null;
+}
+
+export interface OutreachBrief {
+  key: string;
+  candidateId: string;
+  channel: OutreachChannel;
+  summary: string;
+  highlights: string[];
+  requirements: string[];
+  groundingUrls: string[];
+  updatedAt: string;
+}
+
+export interface OutreachState {
+  status: OutreachStatus;
+  preferredChannel: OutreachChannel;
+  selectedDraftId: string;
+  drafts: OutreachDraft[];
+  brief: OutreachBrief | null;
+  lastResearchedAt: string;
+  lastDraftedAt: string;
+  lastSentAt: string;
+}
+
+export interface JobTargetProfile {
+  discipline: string;
+  department: string;
+  targetTitles: string[];
+  seniorityHint: string;
+  keywords: string[];
+  locationHint: string;
+  roleFamily: string;
+}
+
 export interface JobListing {
   id: string;
   title: string;
@@ -36,6 +173,11 @@ export interface JobListing {
   atsKeywordGaps: string[];
   atsSuggestions: AtsSuggestion[];
   status: JobStatus;
+  companyDomain: string;
+  companyIntel: CompanyIntel | null;
+  recruiterCandidates: RecruiterCandidate[];
+  selectedRecruiterId: string;
+  outreach: OutreachState;
   recruiterName: string;
   recruiterTitle: string;
   recruiterProfileUrl: string;
@@ -46,32 +188,6 @@ export interface JobListing {
   source: JobSource;
 }
 
-// ─── ATS Result ──────────────────────────────────────────
-export interface AtsSuggestion {
-  section: "summary" | "experience" | "skills" | "education";
-  bulletIndex: number;
-  original: string;
-  suggested: string;
-  reason: string;
-  keywordsAdded: string[];
-}
-
-export interface AtsResult {
-  score: number; // 0-100
-  matchedKeywords: string[];
-  missingKeywords: string[];
-  suggestions: AtsSuggestion[];
-  scoreBreakdown: {
-    keywordMatch: number;
-    skillsAlignment: number;
-    experienceRelevance: number;
-    formatQuality: number;
-  };
-  topMissingSkills: string[];
-  summary: string;
-}
-
-// ─── Recruiter Profile ──────────────────────────────────
 export interface RecruiterProfile {
   name: string;
   title: string;
@@ -81,7 +197,22 @@ export interface RecruiterProfile {
   source: string;
 }
 
-// ─── API Response Wrappers ──────────────────────────────
+export interface RecruiterResearchResult {
+  companyDomain: string;
+  companyIntel: CompanyIntel | null;
+  candidates: RecruiterCandidate[];
+  selectedRecruiterId: string;
+  lastResearchedAt: string;
+}
+
+export interface OutreachResponseData {
+  candidate: RecruiterCandidate | null;
+  preferredChannel: OutreachChannel;
+  drafts: OutreachDraft[];
+  briefSummary: string;
+  selectedDraftId: string;
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;

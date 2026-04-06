@@ -1,298 +1,360 @@
 "use client";
 
 import { useToast } from "@/components/ToastProvider";
-import { ApiResponse, RecruiterProfile } from "@/types";
-import { useEffect, useState } from "react";
+import { JobListing, RecruiterCandidate, RecruiterResearchResult } from "@/types";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 
 interface RecruiterPanelProps {
-  jobId: string;
-  company: string;
-  role: string;
-  jobDescription: string;
+  job: JobListing;
   autoResearchToken?: number;
   hideHeaderButton?: boolean;
-  onProfilesFound?: (profiles: RecruiterProfile[]) => void;
+  onRefresh?: () => Promise<void> | void;
 }
 
 const LOADING_STEPS = [
-  "Analyzing JD for department and keywords...",
-  "Building targeted LinkedIn search queries...",
-  "Searching web and parsing LinkedIn snippets...",
-  "Synthesizing results with Claude to find top contacts...",
+  "Mapping the role to likely hiring owners...",
+  "Searching first-party and company signals...",
+  "Scoring recruiter and manager candidates...",
+  "Enriching the best contacts for outreach...",
 ];
 
+function hasFreshEvidence(candidate: RecruiterCandidate) {
+  return candidate.evidence.some((entry) => {
+    const lastSeen = entry.lastSeenOn || entry.extractedOn;
+    if (!lastSeen) return false;
+    const timestamp = new Date(lastSeen).getTime();
+    if (Number.isNaN(timestamp)) return false;
+    return Date.now() - timestamp <= 365 * 24 * 60 * 60 * 1000;
+  });
+}
+
+function buildManualSearchUrl(job: JobListing, candidates: RecruiterCandidate[]) {
+  const titles = candidates.slice(0, 3).map((candidate) => candidate.title).filter(Boolean);
+  const query = `${job.company} ${titles.join(" OR ") || job.title} LinkedIn`;
+  return `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(query)}`;
+}
+
+function getPreferredChannel(candidate: RecruiterCandidate | null) {
+  if (!candidate) return "blocked" as const;
+  if (
+    candidate.email &&
+    (candidate.emailVerificationStatus === "valid" || candidate.emailVerificationStatus === "accept_all")
+  ) {
+    return "email" as const;
+  }
+  if (candidate.linkedinUrl) {
+    return "linkedin" as const;
+  }
+  return "blocked" as const;
+}
+
+function Badge({ children }: { children: ReactNode }) {
+  return (
+    <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+      {children}
+    </span>
+  );
+}
+
 export default function RecruiterPanel({
-  jobId,
-  company,
-  role,
-  jobDescription,
+  job,
   autoResearchToken,
   hideHeaderButton,
-  onProfilesFound,
+  onRefresh,
 }: RecruiterPanelProps) {
   const { toast } = useToast();
-  const [profiles, setProfiles] = useState<RecruiterProfile[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
+  const [refreshingCandidateId, setRefreshingCandidateId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  interface EmailResult {
-    email: string;
-    confidence: number;
-    method: string;
-    verified: boolean;
-  }
-  const [emailFinding, setEmailFinding] = useState<Record<string, boolean>>({});
-  const [emailResults, setEmailResults] = useState<Record<string, EmailResult | null>>({});
+  const manualSearchUrl = useMemo(
+    () => buildManualSearchUrl(job, job.recruiterCandidates),
+    [job]
+  );
 
-  // Simulate loading steps visually
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (loading) {
-      setLoadingStep(0);
-      interval = setInterval(() => {
-        setLoadingStep((prev) => Math.min(prev + 1, LOADING_STEPS.length - 1));
-      }, 4000); // Change step text every 4 seconds
-    }
+    if (!loading) return;
+    const interval = setInterval(() => {
+      setLoadingStep((step) => Math.min(step + 1, LOADING_STEPS.length - 1));
+    }, 2200);
     return () => clearInterval(interval);
   }, [loading]);
 
-  const handleResearch = async () => {
-    if (!jobDescription) {
-      setError("Please provide a job description before analyzing.");
+  const handleResearch = async (candidateId?: string) => {
+    if (!job.jobDescription.trim()) {
+      setError("Please provide a job description before researching contacts.");
       return;
     }
+
     setLoading(true);
+    setLoadingStep(0);
     setError(null);
-    setProfiles(null);
+    setRefreshingCandidateId(candidateId || null);
 
     try {
       const res = await fetch("/api/recruiter", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId, company, role, jobDescription }),
+        body: JSON.stringify({
+          jobId: job.id,
+          company: job.company,
+          role: job.title,
+          jobDescription: job.jobDescription,
+          applyUrl: job.applyUrl,
+          companyDescription: job.companyDescription,
+          forceRefresh: true,
+          candidateId,
+        }),
       });
 
-      const data: ApiResponse<RecruiterProfile[]> = await res.json();
-      
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to find recruiters");
+      const response = (await res.json()) as { success: boolean; data?: RecruiterResearchResult; error?: string };
+      if (!res.ok || !response.success || !response.data) {
+        throw new Error(response.error || "Failed to research recruiter contacts");
       }
 
-      setProfiles(data.data || []);
-      onProfilesFound?.(data.data || []);
-      toast(`Found ${data.data?.length || 0} recruiter profiles`, "success");
+      await onRefresh?.();
+      toast(
+        candidateId ? "Contact refreshed" : `Found ${response.data.candidates.length} contact candidates`,
+        "success"
+      );
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "An error occurred";
+      const message = err instanceof Error ? err.message : "Failed to research recruiter contacts";
       setError(message);
       toast(message, "error");
     } finally {
       setLoading(false);
+      setRefreshingCandidateId(null);
+    }
+  };
+
+  const handleSelectCandidate = async (candidateId: string) => {
+    const selected = job.recruiterCandidates.find((candidate) => candidate.id === candidateId) || null;
+    if (!selected) return;
+
+    try {
+      const res = await fetch("/api/jobs", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: job.id,
+          selectedRecruiterId: candidateId,
+          outreach: {
+            ...job.outreach,
+            status: job.outreach.status === "sent" ? "sent" : "researched",
+            preferredChannel: getPreferredChannel(selected),
+          },
+        }),
+      });
+
+      const body = (await res.json()) as { success: boolean; error?: string };
+      if (!res.ok || !body.success) {
+        throw new Error(body.error || "Failed to select contact");
+      }
+
+      await onRefresh?.();
+      toast("Selected contact updated", "success");
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : "Failed to select contact", "error");
     }
   };
 
   useEffect(() => {
-    if (autoResearchToken !== undefined && autoResearchToken > 0) {
-      handleResearch();
+    if (autoResearchToken && autoResearchToken > 0) {
+      void handleResearch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoResearchToken]);
 
-  const handleFindEmail = async (profileKey: string, profile: RecruiterProfile) => {
-    setEmailFinding((prev) => ({ ...prev, [profileKey]: true }));
-    try {
-      const res = await fetch("/api/recruiter/email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recruiterProfile: profile, company, jobId }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success && data.data) {
-        setEmailResults((prev) => ({ ...prev, [profileKey]: data.data }));
-        if (data.data.email) {
-          toast("Recruiter email found", "success");
-        } else {
-          toast("No recruiter email found", "info");
-        }
-      } else {
-        setEmailResults((prev) => ({ ...prev, [profileKey]: null }));
-        toast("Could not resolve recruiter email", "error");
-      }
-    } catch {
-      setEmailResults((prev) => ({ ...prev, [profileKey]: null }));
-      toast("Email lookup failed", "error");
-    } finally {
-      setEmailFinding((prev) => ({ ...prev, [profileKey]: false }));
-    }
-  };
-
-  const manualSearchUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(
-    company + " (recruiter OR talent acquisition OR hiring manager)"
-  )}`;
-
-  const getConfidenceColor = (score: number) => {
-    if (score >= 80) return "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800/30";
-    if (score >= 50) return "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800/30";
-    return "bg-slate-100 text-slate-800 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700";
-  };
-
-  const getConfidenceLabel = (score: number) => {
-    if (score >= 80) return "High Match";
-    if (score >= 50) return "Medium Match";
-    return "Low Match";
-  };
-
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-      <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-900/50">
+    <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-[var(--surface)] shadow-sm dark:border-zinc-800">
+      <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-50/80 p-5 dark:border-zinc-800 dark:bg-zinc-900/60">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Recruiter Research Engine</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Autonomous web search to find the right people to cold email.</p>
+          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Contact Intelligence</h2>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            First-party signals, Hunter enrichment, and grounded fallback research for recruiter outreach.
+          </p>
         </div>
-        {!loading && !hideHeaderButton && (
+        {!hideHeaderButton && (
           <button
-            onClick={handleResearch}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm flex items-center gap-2"
+            onClick={() => handleResearch()}
+            disabled={loading}
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
-            {profiles ? "Run Again" : "Find Recruiters"}
+            {loading ? "Researching..." : job.recruiterCandidates.length ? "Refresh Research" : "Research Contacts"}
           </button>
         )}
       </div>
 
-      <div className="p-6">
-        {loading ? (
-          <div className="space-y-4">
-            <h3 className="text-base font-medium text-slate-900 dark:text-white">Researching {company}...</h3>
-            <div className="text-sm text-blue-600 dark:text-blue-400 font-medium animate-pulse">
-              {LOADING_STEPS[loadingStep]}
+      <div className="space-y-5 p-5">
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge>Domain: {job.companyDomain || "Pending"}</Badge>
+            <Badge>Contacts: {job.recruiterCandidates.length}</Badge>
+            <Badge>Research: {job.outreach.lastResearchedAt ? new Date(job.outreach.lastResearchedAt).toLocaleDateString() : "Not run yet"}</Badge>
+          </div>
+          {job.companyIntel?.description && (
+            <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{job.companyIntel.description}</p>
+          )}
+          {!!job.companyIntel?.signals?.length && (
+            <div className="mt-3 space-y-2">
+              {job.companyIntel.signals.slice(0, 3).map((signal) => (
+                <a
+                  key={`${signal.url}-${signal.title}`}
+                  href={signal.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block rounded-lg border border-zinc-200 bg-white p-3 text-sm text-zinc-600 transition hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-300 dark:hover:border-zinc-700"
+                >
+                  <div className="font-medium text-zinc-900 dark:text-zinc-100">{signal.title || signal.url}</div>
+                  <div className="mt-1 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-400">{signal.snippet}</div>
+                </a>
+              ))}
             </div>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="space-y-4 rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+            <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{LOADING_STEPS[loadingStep]}</p>
             {Array.from({ length: 2 }).map((_, index) => (
-              <div key={`recruiter_skeleton_${index}`} className="rounded-xl border border-slate-200 dark:border-slate-800 p-5">
-                <div className="mb-3 h-5 w-48 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
-                <div className="mb-2 h-4 w-32 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
-                <div className="h-16 animate-pulse rounded bg-slate-100 dark:bg-slate-800" />
+              <div key={index} className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+                <div className="mb-3 h-4 w-44 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                <div className="mb-2 h-3 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                <div className="h-12 animate-pulse rounded bg-zinc-100 dark:bg-zinc-900" />
               </div>
             ))}
           </div>
         ) : error ? (
-          <div className="p-4 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-100 dark:border-red-900/50 text-sm">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-300">
             {error}
           </div>
-        ) : profiles && profiles.length > 0 ? (
+        ) : job.recruiterCandidates.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-zinc-300 p-6 text-center dark:border-zinc-700">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              No candidates have been persisted for this job yet.
+            </p>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={() => handleResearch()}
+                className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              >
+                Research Contacts
+              </button>
+              <a
+                href={manualSearchUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                Manual LinkedIn Search
+              </a>
+            </div>
+          </div>
+        ) : (
           <div className="space-y-4">
-            {profiles.map((profile, i) => {
-              const profileKey = `${profile.name}-${profile.title}-${i}`;
+            {job.recruiterCandidates.map((candidate) => {
+              const isSelected = candidate.id === job.selectedRecruiterId;
+              const canRefresh = !candidate.email || candidate.emailVerificationStatus === "unknown" || candidate.emailVerificationStatus === "unverified";
               return (
-                <div key={profileKey} className="p-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700 transition-colors">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                        {profile.name}
-                        <span className={`text-xs px-2.5 py-0.5 rounded-full border font-medium ${getConfidenceColor(profile.confidence || 0)}`}>
-                          {getConfidenceLabel(profile.confidence || 0)}
-                        </span>
-                      </h3>
-                      <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mt-1">{profile.title}</p>
+                <div
+                  key={candidate.id}
+                  className={`rounded-xl border p-5 transition ${
+                    isSelected
+                      ? "border-zinc-900 bg-zinc-50 dark:border-zinc-200 dark:bg-zinc-900/80"
+                      : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/30"
+                  }`}
+                >
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{candidate.name || "Unknown contact"}</h3>
+                        {isSelected && <Badge>Selected</Badge>}
+                        <Badge>Score {candidate.score}</Badge>
+                      </div>
+                      <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">{candidate.title || "Title unavailable"}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {candidate.emailVerificationStatus === "valid" && <Badge>Verified email</Badge>}
+                        {candidate.emailVerificationStatus === "accept_all" && <Badge>Accept-all email</Badge>}
+                        {!candidate.email && candidate.linkedinUrl && <Badge>LinkedIn only</Badge>}
+                        {candidate.sourceTypes.includes("job-poster") || candidate.sourceTypes.includes("apply-url") ? <Badge>First-party poster</Badge> : null}
+                        {hasFreshEvidence(candidate) ? <Badge>Fresh evidence</Badge> : null}
+                      </div>
                     </div>
-                    
-                    <div className="flex gap-2">
-                      {profile.linkedinUrl && profile.linkedinUrl !== "null" && profile.linkedinUrl !== "empty" && (
+
+                    <div className="flex flex-wrap gap-2">
+                      {candidate.linkedinUrl && (
                         <a
-                          href={profile.linkedinUrl.startsWith('http') ? profile.linkedinUrl : `https://${profile.linkedinUrl}`}
+                          href={candidate.linkedinUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium rounded-lg transition-colors border border-slate-200 dark:border-slate-700 flex items-center gap-1.5"
+                          className="rounded-md border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path><rect width="4" height="12" x="2" y="9"></rect><circle cx="4" cy="4" r="2"></circle></svg>
-                          LinkedIn
+                          Open LinkedIn
                         </a>
                       )}
+                      {canRefresh && (
+                        <button
+                          onClick={() => handleResearch(candidate.id)}
+                          disabled={loading}
+                          className="rounded-md border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                        >
+                          {refreshingCandidateId === candidate.id && loading ? "Refreshing..." : "Refresh Contact"}
+                        </button>
+                      )}
                       <button
-                        onClick={() => handleFindEmail(profileKey, profile)}
-                        disabled={emailFinding[profileKey]}
-                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-400 text-xs font-medium rounded-lg transition-colors border border-indigo-200 dark:border-indigo-800/50 flex items-center gap-1.5 disabled:opacity-50"
+                        onClick={() => handleSelectCandidate(candidate.id)}
+                        disabled={isSelected}
+                        className="rounded-md bg-zinc-900 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
                       >
-                        {emailFinding[profileKey] ? (
-                          <>
-                            <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin"></div>
-                            Finding...
-                          </>
-                        ) : (
-                          <>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>
-                            Find Email
-                          </>
-                        )}
+                        {isSelected ? "Selected" : "Select Contact"}
                       </button>
                     </div>
                   </div>
-                  
-                  {emailResults[profileKey] !== undefined && (
-                    <div className="mb-4">
-                      {emailResults[profileKey] && emailResults[profileKey]?.email ? (
-                        <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800/30 flex justify-between items-center text-sm">
-                          <div className="flex items-center gap-3">
-                            <span className="font-medium text-slate-800 dark:text-slate-200">{emailResults[profileKey]!.email}</span>
-                            <span className={`${emailResults[profileKey]!.verified ? 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'} px-2 py-0.5 rounded text-xs font-semibold`}>
-                              {emailResults[profileKey]!.verified ? "Verified" : "Unverified"}
-                            </span>
-                            <span className="text-slate-500 dark:text-slate-400 text-xs">Score: {Math.round(emailResults[profileKey]!.confidence)}%</span>
-                          </div>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(emailResults[profileKey]!.email);
-                              toast("Email copied", "success");
-                            }}
-                            className="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-                            title="Copy Email"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700 text-sm text-slate-600 dark:text-slate-400 flex items-center gap-2">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-amber-500"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg>
-                          Not found via Hunter.io — try LinkedIn InMail
-                        </div>
-                      )}
+
+                  <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50/60 p-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+                    <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Best channel</div>
+                    <div className="mt-1 text-sm text-zinc-700 dark:text-zinc-200">
+                      {getPreferredChannel(candidate) === "email"
+                        ? candidate.email
+                        : getPreferredChannel(candidate) === "linkedin"
+                          ? "LinkedIn message"
+                          : "Blocked until a usable contact method is found"}
+                    </div>
+                  </div>
+
+                  {!!candidate.reasons.length && (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {candidate.reasons.slice(0, 4).map((reason) => (
+                        <span
+                          key={reason}
+                          className="rounded-full bg-zinc-100 px-2 py-1 text-[11px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                        >
+                          {reason}
+                        </span>
+                      ))}
                     </div>
                   )}
 
-                  <div className="bg-slate-50 dark:bg-slate-900/50 rounded-lg p-3 border border-slate-100 dark:border-slate-800/50 text-xs text-slate-600 dark:text-slate-400 leading-relaxed italic">
-                    <div className="font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5 not-italic">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" x2="8" y1="13" y2="13"></line><line x1="16" x2="8" y1="17" y2="17"></line><line x1="10" x2="8" y1="9" y2="9"></line></svg>
-                      Source Snippet
+                  {!!candidate.evidence.length && (
+                    <div className="mt-4 space-y-2">
+                      {candidate.evidence.slice(0, 2).map((evidence) => (
+                        <a
+                          key={`${candidate.id}-${evidence.url}-${evidence.title}`}
+                          href={evidence.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block rounded-lg border border-zinc-200 bg-white p-3 text-sm hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950/40 dark:hover:border-zinc-700"
+                        >
+                          <div className="font-medium text-zinc-900 dark:text-zinc-100">{evidence.title || evidence.url}</div>
+                          <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{evidence.snippet || evidence.domain}</div>
+                        </a>
+                      ))}
                     </div>
-                    &quot;{profile.source}&quot;
-                  </div>
+                  )}
                 </div>
               );
             })}
-          </div>
-        ) : profiles && profiles.length === 0 ? (
-          <div className="text-center py-10 bg-slate-50 dark:bg-slate-900/30 rounded-xl border border-slate-100 dark:border-slate-800/50">
-            <div className="w-12 h-12 bg-slate-200 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-500">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><line x1="11" x2="11" y1="8" y2="14"></line><line x1="8" x2="14" y1="11" y2="11"></line></svg>
-            </div>
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-white mb-2">No definitive contacts found</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 max-w-sm mx-auto mb-4">
-              We couldn&apos;t lock onto a high-confidence match using the API. You might have better luck searching directly on LinkedIn.
-            </p>
-            <a 
-              href={manualSearchUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-sm font-medium rounded-lg hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors"
-            >
-              Manual Search on LinkedIn
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" x2="21" y1="14" y2="3"></line></svg>
-            </a>
-          </div>
-        ) : (
-          <div className="text-center py-12 flex flex-col items-center justify-center text-slate-500 dark:text-slate-400">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mb-4 text-slate-300 dark:text-slate-700"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
-            <p className="text-sm max-w-sm">Tap &quot;Find Recruiters&quot; to scour the web for the best hiring managers or recruiters to contact for this role.</p>
           </div>
         )}
       </div>

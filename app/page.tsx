@@ -3,13 +3,14 @@
 import JobTable from "@/components/JobTable";
 import ResumeEditor from "@/components/ResumeEditor";
 import { useToast } from "@/components/ToastProvider";
+import { normalizeJobListing } from "@/lib/job-normalize";
 import { JobListing, JobSource, JobStatus, LinkedInTimeRange } from "@/types";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 
 const DEMO_JOBS: JobListing[] = [
-  {
+  normalizeJobListing({
     id: "demo_1",
     title: "Senior Frontend Engineer",
     company: "Stripe",
@@ -35,8 +36,8 @@ const DEMO_JOBS: JobListing[] = [
     jobPosterName: "",
     jobPosterTitle: "",
     source: "linkedin",
-  },
-  {
+  }),
+  normalizeJobListing({
     id: "demo_2",
     title: "Software Engineer",
     company: "Notion",
@@ -62,8 +63,8 @@ const DEMO_JOBS: JobListing[] = [
     jobPosterName: "",
     jobPosterTitle: "",
     source: "indeed",
-  },
-  {
+  }),
+  normalizeJobListing({
     id: "demo_3",
     title: "Backend Engineer",
     company: "Linear",
@@ -89,7 +90,7 @@ const DEMO_JOBS: JobListing[] = [
     jobPosterName: "",
     jobPosterTitle: "",
     source: "indeed",
-  },
+  }),
 ];
 
 const EMPTY_FORM = {
@@ -273,7 +274,7 @@ export default function DashboardPage() {
     setAddJobLoading(true);
     try {
       const now = new Date().toISOString();
-      const job: JobListing = {
+      const job: JobListing = normalizeJobListing({
         id: `manual_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         title: addJobForm.title.trim(),
         company: addJobForm.company.trim(),
@@ -297,7 +298,7 @@ export default function DashboardPage() {
         emailDraft: "",
         jobPosterName: "",
         jobPosterTitle: "",
-      };
+      });
 
       const res = await fetch("/api/jobs", {
         method: "POST",

@@ -2,6 +2,7 @@ import { JobListing, JobSource, LinkedInTimeRange } from "@/types";
 import axios from "axios";
 import crypto from "crypto";
 import { getConfig } from "./local-store";
+import { normalizeJobListing } from "./job-normalize";
 
 export interface ScrapeIssue {
   source: JobSource;
@@ -215,7 +216,7 @@ function normalizeJob(item: ApifyItem, source: JobSource): JobListing | null {
   const idString = `${company}-${title}-${location}`.toLowerCase();
   const id = crypto.createHash("md5").update(idString).digest("hex");
 
-  return {
+  return normalizeJobListing({
     id,
     title,
     company,
@@ -239,7 +240,7 @@ function normalizeJob(item: ApifyItem, source: JobSource): JobListing | null {
     jobPosterName,
     jobPosterTitle,
     source
-  };
+  });
 }
 
 async function runActorAndFetchResults(

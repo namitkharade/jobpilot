@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+out/
+build/
+
+# Cache and generated files
+*.tsbuildinfo
+.resume-cache.json
+
+# Data files (large, machine-generated)
+jobs-db.json
+logs.json
+digest.txt
+
+# Secrets and environment (never read these)
+.env*
+config.json
+config.json.bak
+*.pem
+*.key
+google_service_account.json
+
+# IDE and editor
+.vscode/
+.idea/

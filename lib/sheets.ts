@@ -37,6 +37,11 @@ const CANONICAL_HEADERS = [
   "emailDraft",
   "jobPosterName",
   "jobPosterTitle",
+  "companyDomain",
+  "companyIntel",
+  "recruiterCandidates",
+  "selectedRecruiterId",
+  "outreach",
 ] as const;
 
 const SHEETS_SCOPE = ["https://www.googleapis.com/auth/spreadsheets"];
@@ -185,6 +190,21 @@ function buildRow(job: JobListing, headers: string[]): string[] {
       case "jobPosterTitle":
         row[index] = job.jobPosterTitle;
         break;
+      case "companyDomain":
+        row[index] = job.companyDomain;
+        break;
+      case "companyIntel":
+        row[index] = job.companyIntel ? JSON.stringify(job.companyIntel) : "";
+        break;
+      case "recruiterCandidates":
+        row[index] = Array.isArray(job.recruiterCandidates) ? JSON.stringify(job.recruiterCandidates) : "[]";
+        break;
+      case "selectedRecruiterId":
+        row[index] = job.selectedRecruiterId;
+        break;
+      case "outreach":
+        row[index] = job.outreach ? JSON.stringify(job.outreach) : "";
+        break;
       default:
         row[index] = "";
     }
@@ -284,6 +304,11 @@ function parseJobFromRow(row: string[], map: HeaderMap): JobListing | null {
     emailDraft: getCell(row, map, ["emailDraft"], 20),
     jobPosterName: getCell(row, map, ["jobPosterName"], 21),
     jobPosterTitle: getCell(row, map, ["jobPosterTitle"], 22),
+    companyDomain: getCell(row, map, ["companyDomain"], 23),
+    companyIntel: getCell(row, map, ["companyIntel"], 24),
+    recruiterCandidates: getCell(row, map, ["recruiterCandidates"], 25),
+    selectedRecruiterId: getCell(row, map, ["selectedRecruiterId"], 26),
+    outreach: getCell(row, map, ["outreach"], 27),
   });
 }
 

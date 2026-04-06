@@ -7,12 +7,17 @@ export interface SearchResult {
   snippet: string;
 }
 
+export function getConfiguredSearXNGUrl(): string {
+  return (process.env.SEARXNG_URL || getConfig().apiKeys.searxng || "").trim().replace(/\/+$/, "");
+}
+
+export function hasConfiguredSearXNG(): boolean {
+  return Boolean(getConfiguredSearXNGUrl());
+}
+
 function getInstances(): string[] {
-  const configured = process.env.SEARXNG_URL || getConfig().apiKeys.searxng || "";
-  return [
-    configured,
-    "https://namitkharade-searxng.hf.space",
-  ].filter(Boolean);
+  const configured = getConfiguredSearXNGUrl();
+  return configured ? [configured] : [];
 }
 
 export async function searchWeb(
@@ -20,6 +25,9 @@ export async function searchWeb(
   maxResults = 5
 ): Promise<SearchResult[]> {
   const instances = getInstances();
+  if (!instances.length) {
+    return [];
+  }
 
   for (const instance of instances) {
     try {
@@ -54,7 +62,7 @@ export async function searchWeb(
     }
   }
 
-  console.error("All SearXNG instances failed for query:", query);
+  console.warn("Configured SearXNG instance failed for query:", query);
   return [];
 }
 

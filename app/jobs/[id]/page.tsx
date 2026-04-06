@@ -2,11 +2,11 @@
 
 import ApplicationAssistant from "@/components/ApplicationAssistant";
 import AtsScoreCard from "@/components/AtsScoreCard";
-import EmailDrafter from "@/components/EmailDrafter";
+import OutreachComposer from "@/components/OutreachComposer";
 import RecruiterPanel from "@/components/RecruiterPanel";
 import { useToast } from "@/components/ToastProvider";
 import { STATUS_OPTIONS, getStatusClasses, getStatusLabel } from "@/lib/job-status";
-import { AtsResult, AtsSuggestion, JobListing, RecruiterProfile } from "@/types";
+import { AtsResult, AtsSuggestion, JobListing } from "@/types";
 import clsx from "clsx";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -32,14 +32,6 @@ interface AtsSuggestionsResponse {
     score: number;
     missingKeywords: string[];
     suggestions: AtsSuggestion[];
-  };
-  error?: string;
-}
-
-interface ResumeStatusResponse {
-  success: boolean;
-  data?: {
-    text: string;
   };
   error?: string;
 }
@@ -143,10 +135,8 @@ export default function JobDetailPage() {
   const [tailoredPdfError, setTailoredPdfError] = useState<string | null>(null);
   const [tailoredPdfUrl, setTailoredPdfUrl] = useState<string | null>(null);
 
-  const [resumeSummary, setResumeSummary] = useState("");
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [researchToken, setResearchToken] = useState(0);
-  const [profiles, setProfiles] = useState<RecruiterProfile[]>([]);
 
   const [coverLetterText, setCoverLetterText] = useState("");
   const [coverLetterLoading, setCoverLetterLoading] = useState(false);
@@ -208,17 +198,6 @@ export default function JobDetailPage() {
     loadJob();
     loadAtsSuggestions();
   }, [loadAtsSuggestions, loadJob]);
-
-  useEffect(() => {
-    fetch("/api/resume/status", { cache: "no-store" })
-      .then((res) => res.json() as Promise<ResumeStatusResponse>)
-      .then((body) => {
-        if (body.success && body.data?.text) {
-          setResumeSummary((body.data.text as string).slice(0, 8000));
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (!job) return;
@@ -495,9 +474,8 @@ export default function JobDetailPage() {
 
   const hasRecruiter = useMemo(() => {
     if (!job) return false;
-    if (profiles.length > 0) return true;
-    return Boolean(job.recruiterName || job.recruiterEmail || job.recruiterProfileUrl);
-  }, [job, profiles]);
+    return job.recruiterCandidates.length > 0 || Boolean(job.recruiterName || job.recruiterEmail || job.recruiterProfileUrl);
+  }, [job]);
 
   if (loading) {
     return <main className="p-8 text-sm text-zinc-500">Loading job...</main>;
@@ -808,13 +786,10 @@ export default function JobDetailPage() {
                 Research Recruiters
               </button>
               <RecruiterPanel
-                jobId={job.id}
-                company={job.company}
-                role={job.title}
-                jobDescription={job.jobDescription}
+                job={job}
                 hideHeaderButton
                 autoResearchToken={researchToken}
-                onProfilesFound={setProfiles}
+                onRefresh={loadJob}
               />
             </div>
           )}
@@ -826,21 +801,7 @@ export default function JobDetailPage() {
                   No recruiter found yet. Go to the Recruiters tab and run &quot;Research Recruiters&quot; first.
                 </div>
               ) : (
-                <EmailDrafter
-                  jobId={job.id}
-                  recruiter={
-                    profiles[0] || {
-                      name: job.recruiterName || "Hiring Team",
-                      title: job.recruiterTitle || "Recruiter",
-                      linkedinUrl: job.recruiterProfileUrl || "",
-                      email: job.recruiterEmail || "",
-                      confidence: 70,
-                      source: "sheet",
-                    }
-                  }
-                  jobListing={job}
-                  resumeSummary={resumeSummary}
-                />
+                <OutreachComposer job={job} onRefresh={loadJob} />
               )}
             </div>
           )}
