@@ -1,38 +1,77 @@
 /**
- * Compiles a LaTeX source string to PDF using Tectonic via node-latex-compiler. Downloads Tectonic binary automatically on first run. Requires Node.js runtime.
+ * Compiles a LaTeX source string to PDF using Tectonic in a writable temp
+ * workspace. This avoids serverless runtime failures when package directories
+ * are read-only, which is the case on Vercel.
  */
+import { spawn } from "child_process";
 import fs from "fs";
-import { compile } from "node-latex-compiler";
 import os from "os";
 import path from "path";
 
-type CompileResult = {
-  status: string;
-  error?: string;
-  stderr?: string;
-  pdfBuffer?: Uint8Array;
-};
+function normalizeArch(arch: string): string {
+  if (arch === "x86_64" || arch === "amd64") return "x64";
+  if (arch === "aarch64") return "arm64";
+  return arch;
+}
 
-function resolveTectonicPath(): string | undefined {
-  if (process.env.TECTONIC_PATH) {
-    return process.env.TECTONIC_PATH;
+function getExecutableName(): string {
+  return process.platform === "win32" ? "tectonic.exe" : "tectonic";
+}
+
+function getRuntimePackageName(): string | null {
+  const arch = normalizeArch(process.arch);
+
+  if (process.platform === "win32" && arch === "x64") {
+    return "@node-latex-compiler/bin-win32-x64";
+  }
+  if (process.platform === "darwin" && arch === "x64") {
+    return "@node-latex-compiler/bin-darwin-x64";
+  }
+  if (process.platform === "darwin" && arch === "arm64") {
+    return "@node-latex-compiler/bin-darwin-arm64";
+  }
+  if (process.platform === "linux" && arch === "x64") {
+    return "@node-latex-compiler/bin-linux-x64";
   }
 
-  if (process.platform === "win32") {
-    const bundled = path.join(
-      process.cwd(),
-      "node_modules",
-      "@node-latex-compiler",
-      "bin-win32-x64",
-      "bin",
-      "tectonic.exe"
-    );
-    if (fs.existsSync(bundled)) {
-      return bundled;
+  return null;
+}
+
+function resolveBundledTectonicPath(): string | undefined {
+  const runtimePackage = getRuntimePackageName();
+  if (!runtimePackage) return undefined;
+
+  const exeName = getExecutableName();
+  const candidates = [
+    path.join(process.cwd(), "node_modules", runtimePackage, "bin", exeName),
+    path.join(process.cwd(), "node_modules", "node-latex-compiler", "node_modules", runtimePackage, "bin", exeName),
+  ];
+
+  const bundled = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!bundled) return undefined;
+
+  if (process.platform !== "win32") {
+    try {
+      fs.chmodSync(bundled, 0o755);
+    } catch {
+      // Best effort only.
     }
   }
 
-  return undefined;
+  return bundled;
+}
+
+function resolveTectonicPath(): string {
+  if (process.env.TECTONIC_PATH && fs.existsSync(process.env.TECTONIC_PATH)) {
+    return process.env.TECTONIC_PATH;
+  }
+
+  const bundled = resolveBundledTectonicPath();
+  if (bundled) {
+    return bundled;
+  }
+
+  return process.platform === "win32" ? "tectonic.exe" : "tectonic";
 }
 
 function ensureFontconfigEnv(): void {
@@ -76,28 +115,69 @@ ${dirNodes}${fallbackNode}
   process.env.XDG_CACHE_HOME = cacheDir;
 }
 
+function createWorkspace() {
+  const baseDir = path.join(os.tmpdir(), "jobpilot-latex");
+  fs.mkdirSync(baseDir, { recursive: true });
+  return fs.mkdtempSync(path.join(baseDir, "compile-"));
+}
+
+function runTectonic(tectonicPath: string, texFilePath: string, workspace: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      tectonicPath,
+      [texFilePath, `--outdir=${workspace}`],
+      {
+        cwd: workspace,
+        env: process.env,
+        windowsHide: true,
+      }
+    );
+
+    let stderr = "";
+    let stdout = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (error) => {
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr.trim() || stdout.trim() || `Tectonic exited with code ${code}`));
+    });
+  });
+}
+
 export async function compileTex(texSource: string): Promise<Buffer> {
+  const workspace = createWorkspace();
+  const texFilePath = path.join(workspace, "document.tex");
+  const pdfFilePath = path.join(workspace, "document.pdf");
+
   try {
     ensureFontconfigEnv();
-    const tectonicPath = resolveTectonicPath();
-    const result = (await compile({
-      tex: texSource,
-      returnBuffer: true,
-      ...(tectonicPath ? { tectonicPath } : {}),
-    })) as CompileResult;
+    fs.writeFileSync(texFilePath, texSource, "utf8");
 
-    if (result.status !== "success") {
-      const errorMessage = result.error || result.stderr || "LaTeX compilation failed";
-      throw new Error(errorMessage);
+    await runTectonic(resolveTectonicPath(), texFilePath, workspace);
+
+    if (!fs.existsSync(pdfFilePath)) {
+      throw new Error("PDF file was not generated");
     }
 
-    if (!result.pdfBuffer) {
-      throw new Error("LaTeX compilation failed");
-    }
-
-    return Buffer.from(result.pdfBuffer);
+    return fs.readFileSync(pdfFilePath);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`LaTeX compilation failed: ${message}`);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 }
