@@ -1,27 +1,65 @@
-import { saveResumeCache } from "@/lib/openai";
+import {
+  getResumeDocument,
+  getResumeDocumentStatus,
+  saveResumeCache,
+  saveTailoredResume,
+} from "@/lib/openai";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function normalizeJobId(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const jobId = normalizeJobId(searchParams.get("jobId"));
+  const status = getResumeDocumentStatus(jobId || undefined);
+  const document = getResumeDocument(jobId || undefined);
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      ...status,
+      jobId: jobId || null,
+      hasJobSpecificDraft: Boolean(jobId && document?.texSource.trim()),
+    },
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { resumeText?: unknown };
-    const resumeText = typeof body.resumeText === "string" ? body.resumeText : "";
+    const body = (await req.json()) as {
+      texSource?: unknown;
+      fileName?: unknown;
+      jobId?: unknown;
+    };
 
-    if (!resumeText.trim()) {
+    const texSource = typeof body.texSource === "string" ? body.texSource : "";
+    const fileName = typeof body.fileName === "string" ? body.fileName : "";
+    const jobId = normalizeJobId(body.jobId);
+
+    if (!texSource.trim()) {
       return NextResponse.json(
-        { success: false, error: "resumeText is required" },
+        { success: false, error: "texSource is required" },
         { status: 400 }
       );
     }
 
-    saveResumeCache(resumeText);
+    if (jobId) {
+      saveTailoredResume(jobId, texSource, { fileName });
+    } else {
+      saveResumeCache(texSource, { fileName });
+    }
+
+    const status = getResumeDocumentStatus(jobId || undefined);
 
     return NextResponse.json({
       success: true,
       data: {
-        characterCount: resumeText.length,
-        updatedAt: new Date().toISOString(),
+        ...status,
+        jobId: jobId || null,
       },
     });
   } catch (error: unknown) {

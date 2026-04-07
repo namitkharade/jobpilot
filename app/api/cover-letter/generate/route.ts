@@ -1,61 +1,66 @@
+import { buildCoverLetterTex } from "@/lib/cover-letter";
 import { getAllJobs } from "@/lib/job-store";
 import { getConfig } from "@/lib/local-store";
 import {
-    getCoverLetterCacheStatus,
-    loadResumeCache,
-    saveTailoredCoverLetter,
+  getCoverLetterDocument,
+  getResumeTextForPrompt,
+  looksLikeTex,
+  saveTailoredCoverLetter,
 } from "@/lib/openai";
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 
 export const runtime = "nodejs";
 
-const SYSTEM_PROMPT = `You are an expert career writing assistant. Write concise, specific, and credible cover letters in plain text. No markdown. Avoid placeholders. Keep a professional and confident tone.`;
+const SYSTEM_PROMPT = `You are an expert career writing assistant who writes cover letters directly in LaTeX. Return only the final LaTeX source for a complete cover letter document. Preserve the existing template structure when a base cover letter template is supplied. Do not use markdown fences.`;
+
+function sanitizeFileSegment(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "job";
+}
 
 function buildPrompt(args: {
-  baseCoverLetter: string;
+  baseCoverLetterTex: string;
+  hasBaseTemplate: boolean;
   resumeText: string;
   jobDescription: string;
   companyDescription: string;
   title: string;
   company: string;
 }) {
-  const instruction = args.baseCoverLetter.trim()
-    ? "Refine and adapt the provided BASE COVER LETTER for this role. Keep useful details and rewrite weak parts."
-    : "Create a new role-specific cover letter from scratch.";
+  const defaultTemplate = buildCoverLetterTex("Dear Hiring Team,\n\nWrite the tailored letter body here.\n\nSincerely,\nCandidate");
 
-  return `${instruction}
-
-Role: ${args.title}
-Company: ${args.company}
-
-JOB DESCRIPTION:
-${args.jobDescription}
-
-COMPANY DESCRIPTION:
-${args.companyDescription || "Not provided"}
-
-RESUME SUMMARY/CV CONTENT:
-${args.resumeText}
-
-BASE COVER LETTER (optional):
-${args.baseCoverLetter || "Not provided"}
-
-Output requirements:
-- Return only the final cover letter text.
-- 250-450 words.
-- Include greeting and sign-off.
-- Mention 2-3 concrete experiences/skills aligned to the job.
-- Do not invent tools, achievements, or numbers not present in the resume context.
-- No markdown, no bullet list.`;
+  return [
+    args.hasBaseTemplate
+      ? "Adapt the provided BASE COVER LETTER LATEX template for this specific role while preserving its structure and styling."
+      : "Create a new tailored LaTeX cover letter using the provided DEFAULT LATEX TEMPLATE as the structure.",
+    `Role: ${args.title}`,
+    `Company: ${args.company}`,
+    `Job description:\n${args.jobDescription}`,
+    `Company description:\n${args.companyDescription || "Not provided"}`,
+    `Resume context:\n${args.resumeText}`,
+    `Base cover letter template:\n${args.baseCoverLetterTex || "Not provided"}`,
+    `Default template:\n${defaultTemplate}`,
+    `Requirements:
+- Return complete valid LaTeX for the entire document.
+- Keep a professional greeting and sign-off.
+- Mention 2-3 concrete skills or experiences from the resume context.
+- Do not invent employers, metrics, or tools not supported by the resume context.
+- If a base template is supplied, preserve its layout and command structure as much as possible.
+- Return only LaTeX.`,
+  ].join("\n\n");
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as { jobId?: unknown };
-    const jobId = typeof body.jobId === "string" ? body.jobId : "";
+    const jobId = typeof body.jobId === "string" ? body.jobId.trim() : "";
 
-    if (!jobId.trim()) {
+    if (!jobId) {
       return NextResponse.json({ success: false, error: "jobId is required" }, { status: 400 });
     }
 
@@ -65,12 +70,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Job not found" }, { status: 404 });
     }
 
-    const resumeText = loadResumeCache();
-    if (!resumeText?.trim()) {
-      return NextResponse.json({ success: false, error: "No base resume found in cache" }, { status: 400 });
+    const resumeText = getResumeTextForPrompt(job.id) || getResumeTextForPrompt();
+    if (!resumeText.trim()) {
+      return NextResponse.json({ success: false, error: "No resume template found in cache" }, { status: 400 });
     }
 
-    const baseCoverLetter = getCoverLetterCacheStatus().text;
+    const baseCoverLetter = getCoverLetterDocument();
+    const baseCoverLetterTex = baseCoverLetter?.texSource
+      ? looksLikeTex(baseCoverLetter.texSource)
+        ? baseCoverLetter.texSource
+        : buildCoverLetterTex(baseCoverLetter.texSource)
+      : "";
 
     const config = getConfig();
     const apiKey = config.apiKeys.openai;
@@ -89,7 +99,8 @@ export async function POST(req: NextRequest) {
         {
           role: "user",
           content: buildPrompt({
-            baseCoverLetter,
+            baseCoverLetterTex,
+            hasBaseTemplate: Boolean(baseCoverLetterTex.trim()),
             resumeText,
             jobDescription: job.jobDescription || "",
             companyDescription: job.companyDescription || "",
@@ -98,7 +109,7 @@ export async function POST(req: NextRequest) {
           }),
         },
       ],
-      max_tokens: 1200,
+      max_tokens: 2500,
     });
 
     const coverLetterText = completion.choices[0]?.message?.content?.trim() || "";
@@ -109,13 +120,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    saveTailoredCoverLetter(jobId, coverLetterText);
+    const fileName = `${sanitizeFileSegment(job.company)}-${sanitizeFileSegment(job.title)}-cover-letter.tex`;
+    saveTailoredCoverLetter(jobId, coverLetterText, { fileName });
 
     return NextResponse.json({
       success: true,
       data: {
         coverLetterText,
-        usedBaseCoverLetter: Boolean(baseCoverLetter.trim()),
+        fileName,
+        usedBaseCoverLetter: Boolean(baseCoverLetterTex.trim()),
       },
     });
   } catch (error: unknown) {

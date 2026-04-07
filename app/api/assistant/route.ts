@@ -1,6 +1,6 @@
 import { getAllJobs } from "@/lib/job-store";
 import { getConfig } from "@/lib/local-store";
-import { loadResumeCache } from "@/lib/openai";
+import { getResumeTextForPrompt } from "@/lib/openai";
 import { searchWeb } from "@/lib/searxng";
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
@@ -99,14 +99,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const resumeText = loadResumeCache();
-    if (!resumeText || !resumeText.trim()) {
-      return NextResponse.json(
-        { success: false, error: "No resume found. Please upload your resume first." },
-        { status: 400 }
-      );
-    }
-
     const jobs = await getAllJobs();
     const job = jobs.find((item) => item.id === jobId);
 
@@ -114,6 +106,14 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { success: false, error: "Job not found" },
         { status: 404 }
+      );
+    }
+
+    const resumeText = getResumeTextForPrompt(job.id) || getResumeTextForPrompt();
+    if (!resumeText || !resumeText.trim()) {
+      return NextResponse.json(
+        { success: false, error: "No resume found. Please upload your resume first." },
+        { status: 400 }
       );
     }
 

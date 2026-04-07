@@ -1,5 +1,5 @@
 import { appendCronLog, getConfig, saveConfig } from "@/lib/local-store";
-import { loadResumeCache } from "@/lib/openai";
+import { getResumeDocumentStatus } from "@/lib/openai";
 import { JobListing } from "@/types";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -81,12 +81,12 @@ export async function POST(req: NextRequest) {
     });
 
     const newJobs = (afterJobsRes.data || []).filter((job) => !beforeIds.has(job.id));
-    const resumeText = loadResumeCache();
+    const resumeStatus = getResumeDocumentStatus();
 
     let atsTriggered = 0;
     const atsErrors: string[] = [];
 
-    if (resumeText?.trim()) {
+    if (resumeStatus.loaded) {
       const atsCalls = await Promise.allSettled(
         newJobs.map((job) =>
           fetch(`${baseUrl}/api/ats`, {

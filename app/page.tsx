@@ -365,7 +365,7 @@ export default function DashboardPage() {
             onClick={() => setResumeOpen(true)}
             className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
-            Upload Resume
+            Open Document Hub
           </button>
         </div>
       </section>

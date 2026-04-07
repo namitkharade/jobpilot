@@ -36,13 +36,28 @@ interface StructuredResponseResult<T> {
   webSources: string[];
 }
 
+export interface StoredTexDocument {
+  texSource: string;
+  fileName: string;
+  updatedAt: string;
+}
+
+interface LegacyTailoredDocument {
+  text: string;
+  updatedAt: string;
+}
+
 interface ResumeCacheData {
   resumeText: string;
   updatedAt: string;
-  tailoredResumes: Record<string, { text: string; updatedAt: string }>;
+  tailoredResumes: Record<string, LegacyTailoredDocument>;
   coverLetterText: string;
   coverLetterUpdatedAt: string;
-  tailoredCoverLetters: Record<string, { text: string; updatedAt: string }>;
+  tailoredCoverLetters: Record<string, LegacyTailoredDocument>;
+  baseResumeDocument: StoredTexDocument | null;
+  baseCoverLetterDocument: StoredTexDocument | null;
+  tailoredResumeDocuments: Record<string, StoredTexDocument>;
+  tailoredCoverLetterDocuments: Record<string, StoredTexDocument>;
 }
 
 const DEFAULT_FAST_MODEL = "gpt-5.4-nano";
@@ -224,6 +239,19 @@ export function extractResumeText(latexSource: string): string {
   return text.trim();
 }
 
+export function looksLikeTex(source: string): boolean {
+  const text = source.trim();
+  if (!text) return false;
+
+  return /\\documentclass|\\begin\{|\\section\*?\{|\\subsection\*?\{|\\item\b|\\textbf\{|\\resume/i.test(text);
+}
+
+export function extractPlainTextFromDocument(source: string): string {
+  const text = source.trim();
+  if (!text) return "";
+  return looksLikeTex(text) ? extractResumeText(text) : text;
+}
+
 /** Resume caching logic */
 export function getResumeCachePath() {
   if (process.env.VERCEL === "1") {
@@ -232,17 +260,114 @@ export function getResumeCachePath() {
   return path.join(process.cwd(), ".resume-cache.json");
 }
 
+function createEmptyResumeCache(): ResumeCacheData {
+  return {
+    resumeText: "",
+    updatedAt: "",
+    tailoredResumes: {},
+    coverLetterText: "",
+    coverLetterUpdatedAt: "",
+    tailoredCoverLetters: {},
+    baseResumeDocument: null,
+    baseCoverLetterDocument: null,
+    tailoredResumeDocuments: {},
+    tailoredCoverLetterDocuments: {},
+  };
+}
+
+function normalizeLegacyDocument(value: unknown): LegacyTailoredDocument | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const text = typeof (value as { text?: unknown }).text === "string" ? (value as { text: string }).text : "";
+  const updatedAt =
+    typeof (value as { updatedAt?: unknown }).updatedAt === "string"
+      ? (value as { updatedAt: string }).updatedAt
+      : "";
+
+  if (!text.trim() && !updatedAt) {
+    return null;
+  }
+
+  return { text, updatedAt };
+}
+
+function normalizeStoredDocument(value: unknown): StoredTexDocument | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const texSource =
+    typeof (value as { texSource?: unknown }).texSource === "string"
+      ? (value as { texSource: string }).texSource
+      : "";
+  const fileName =
+    typeof (value as { fileName?: unknown }).fileName === "string"
+      ? (value as { fileName: string }).fileName
+      : "";
+  const updatedAt =
+    typeof (value as { updatedAt?: unknown }).updatedAt === "string"
+      ? (value as { updatedAt: string }).updatedAt
+      : "";
+
+  if (!texSource.trim() && !fileName && !updatedAt) {
+    return null;
+  }
+
+  return { texSource, fileName, updatedAt };
+}
+
+function normalizeLegacyDocumentMap(value: unknown): Record<string, LegacyTailoredDocument> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, LegacyTailoredDocument>>(
+    (acc, [key, entry]) => {
+      const normalized = normalizeLegacyDocument(entry);
+      if (normalized) {
+        acc[key] = normalized;
+      }
+      return acc;
+    },
+    {}
+  );
+}
+
+function normalizeStoredDocumentMap(value: unknown): Record<string, StoredTexDocument> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, StoredTexDocument>>(
+    (acc, [key, entry]) => {
+      const normalized = normalizeStoredDocument(entry);
+      if (normalized) {
+        acc[key] = normalized;
+      }
+      return acc;
+    },
+    {}
+  );
+}
+
+function buildStoredDocument(texSource: string, fileName: string | undefined, updatedAt: string): StoredTexDocument {
+  return {
+    texSource,
+    fileName: fileName?.trim() || "",
+    updatedAt,
+  };
+}
+
+function getLegacyTailoredLookupKey(jobId: string): string[] {
+  return [jobId, `resume_${jobId}`];
+}
+
 function readResumeCache(): ResumeCacheData {
   const p = getResumeCachePath();
   if (!fs.existsSync(p)) {
-    return {
-      resumeText: "",
-      updatedAt: "",
-      tailoredResumes: {},
-      coverLetterText: "",
-      coverLetterUpdatedAt: "",
-      tailoredCoverLetters: {},
-    };
+    return createEmptyResumeCache();
   }
 
   try {
@@ -252,12 +377,11 @@ function readResumeCache(): ResumeCacheData {
 
     return {
       resumeText: typeof raw.resumeText === "string" ? raw.resumeText : "",
-      updatedAt: typeof (raw as Partial<ResumeCacheData>).updatedAt === "string" ? (raw as Partial<ResumeCacheData>).updatedAt || "" : "",
-      tailoredResumes:
-        (raw as Partial<ResumeCacheData>).tailoredResumes &&
-        typeof (raw as Partial<ResumeCacheData>).tailoredResumes === "object"
-          ? (raw as Partial<ResumeCacheData>).tailoredResumes || {}
-          : {},
+      updatedAt:
+        typeof (raw as Partial<ResumeCacheData>).updatedAt === "string"
+          ? (raw as Partial<ResumeCacheData>).updatedAt || ""
+          : "",
+      tailoredResumes: normalizeLegacyDocumentMap((raw as Partial<ResumeCacheData>).tailoredResumes),
       coverLetterText:
         typeof (raw as Partial<ResumeCacheData>).coverLetterText === "string"
           ? (raw as Partial<ResumeCacheData>).coverLetterText || ""
@@ -266,21 +390,16 @@ function readResumeCache(): ResumeCacheData {
         typeof (raw as Partial<ResumeCacheData>).coverLetterUpdatedAt === "string"
           ? (raw as Partial<ResumeCacheData>).coverLetterUpdatedAt || ""
           : "",
-      tailoredCoverLetters:
-        (raw as Partial<ResumeCacheData>).tailoredCoverLetters &&
-        typeof (raw as Partial<ResumeCacheData>).tailoredCoverLetters === "object"
-          ? (raw as Partial<ResumeCacheData>).tailoredCoverLetters || {}
-          : {},
+      tailoredCoverLetters: normalizeLegacyDocumentMap((raw as Partial<ResumeCacheData>).tailoredCoverLetters),
+      baseResumeDocument: normalizeStoredDocument((raw as Partial<ResumeCacheData>).baseResumeDocument),
+      baseCoverLetterDocument: normalizeStoredDocument((raw as Partial<ResumeCacheData>).baseCoverLetterDocument),
+      tailoredResumeDocuments: normalizeStoredDocumentMap((raw as Partial<ResumeCacheData>).tailoredResumeDocuments),
+      tailoredCoverLetterDocuments: normalizeStoredDocumentMap(
+        (raw as Partial<ResumeCacheData>).tailoredCoverLetterDocuments
+      ),
     };
   } catch {
-    return {
-      resumeText: "",
-      updatedAt: "",
-      tailoredResumes: {},
-      coverLetterText: "",
-      coverLetterUpdatedAt: "",
-      tailoredCoverLetters: {},
-    };
+    return createEmptyResumeCache();
   }
 }
 
@@ -288,34 +407,96 @@ function writeResumeCache(next: ResumeCacheData) {
   fs.writeFileSync(getResumeCachePath(), JSON.stringify(next, null, 2), "utf8");
 }
 
-export function saveResumeCache(resumeText: string) {
+function getResumeDocumentFromCache(cache: ResumeCacheData, jobId?: string): StoredTexDocument | null {
+  if (jobId?.trim()) {
+    const direct = cache.tailoredResumeDocuments[jobId];
+    if (direct) return direct;
+
+    const legacy = getLegacyTailoredLookupKey(jobId)
+      .map((key) => cache.tailoredResumes[key])
+      .find((entry) => entry?.text?.trim());
+
+    return legacy
+      ? buildStoredDocument(legacy.text, `${jobId}.tex`, legacy.updatedAt || "")
+      : null;
+  }
+
+  if (cache.baseResumeDocument?.texSource.trim()) {
+    return cache.baseResumeDocument;
+  }
+
+  if (cache.resumeText.trim()) {
+    return buildStoredDocument(cache.resumeText, "resume.tex", cache.updatedAt || "");
+  }
+
+  return null;
+}
+
+function getCoverLetterDocumentFromCache(cache: ResumeCacheData, jobId?: string): StoredTexDocument | null {
+  if (jobId?.trim()) {
+    const direct = cache.tailoredCoverLetterDocuments[jobId];
+    if (direct) return direct;
+
+    const legacy = cache.tailoredCoverLetters[jobId];
+    return legacy
+      ? buildStoredDocument(legacy.text, `${jobId}-cover-letter.txt`, legacy.updatedAt || "")
+      : null;
+  }
+
+  if (cache.baseCoverLetterDocument?.texSource.trim()) {
+    return cache.baseCoverLetterDocument;
+  }
+
+  if (cache.coverLetterText.trim()) {
+    return buildStoredDocument(cache.coverLetterText, "cover-letter.txt", cache.coverLetterUpdatedAt || "");
+  }
+
+  return null;
+}
+
+function buildDocumentStatus(document: StoredTexDocument | null) {
+  return {
+    loaded: Boolean(document?.texSource.trim()),
+    characterCount: document?.texSource.length || 0,
+    text: document?.texSource || "",
+    texSource: document?.texSource || "",
+    fileName: document?.fileName || null,
+    updatedAt: document?.updatedAt || null,
+  };
+}
+
+export function saveResumeCache(resumeText: string, options?: { fileName?: string }) {
   const current = readResumeCache();
   const now = new Date().toISOString();
+  const document = buildStoredDocument(resumeText, options?.fileName || "resume.tex", now);
   writeResumeCache({
     ...current,
     resumeText,
     updatedAt: now,
+    baseResumeDocument: document,
   });
 }
 
 export function loadResumeCache(): string | null {
-  const cache = readResumeCache();
-  return cache.resumeText || null;
+  return getResumeDocument()?.texSource || null;
 }
 
 export function getResumeCacheStatus() {
-  const cache = readResumeCache();
-  return {
-    loaded: Boolean(cache.resumeText.trim()),
-    characterCount: cache.resumeText.length,
-    text: cache.resumeText,
-    updatedAt: cache.updatedAt || null,
-  };
+  return buildDocumentStatus(getResumeDocument());
 }
 
-export function saveTailoredResume(jobId: string, tailoredResume: string) {
+export function getResumeDocument(jobId?: string): StoredTexDocument | null {
+  return getResumeDocumentFromCache(readResumeCache(), jobId);
+}
+
+export function getResumeTextForPrompt(jobId?: string): string {
+  return extractPlainTextFromDocument(getResumeDocument(jobId)?.texSource || "");
+}
+
+export function saveTailoredResume(jobId: string, tailoredResume: string, options?: { fileName?: string }) {
   const cache = readResumeCache();
   const now = new Date().toISOString();
+  const document = buildStoredDocument(tailoredResume, options?.fileName || `${jobId}.tex`, now);
   writeResumeCache({
     ...cache,
     tailoredResumes: {
@@ -325,37 +506,67 @@ export function saveTailoredResume(jobId: string, tailoredResume: string) {
         updatedAt: now,
       },
     },
+    tailoredResumeDocuments: {
+      ...cache.tailoredResumeDocuments,
+      [jobId]: document,
+    },
   });
 }
 
 export function loadTailoredResume(jobId: string): string | null {
-  const cache = readResumeCache();
-  return cache.tailoredResumes[jobId]?.text || cache.tailoredResumes[`resume_${jobId}`]?.text || null;
+  return getResumeDocument(jobId)?.texSource || null;
 }
 
-export function saveCoverLetterCache(coverLetterText: string) {
+export function getResumeDocumentStatus(jobId?: string) {
+  return buildDocumentStatus(getResumeDocument(jobId));
+}
+
+export function clearResumeCache() {
+  const cache = readResumeCache();
+  writeResumeCache({
+    ...cache,
+    resumeText: "",
+    updatedAt: "",
+    baseResumeDocument: null,
+  });
+}
+
+export function saveCoverLetterCache(coverLetterText: string, options?: { fileName?: string }) {
   const current = readResumeCache();
   const now = new Date().toISOString();
+  const document = buildStoredDocument(
+    coverLetterText,
+    options?.fileName || "cover-letter.tex",
+    now
+  );
   writeResumeCache({
     ...current,
     coverLetterText,
     coverLetterUpdatedAt: now,
+    baseCoverLetterDocument: document,
   });
 }
 
 export function getCoverLetterCacheStatus() {
-  const cache = readResumeCache();
-  return {
-    loaded: Boolean(cache.coverLetterText.trim()),
-    characterCount: cache.coverLetterText.length,
-    text: cache.coverLetterText,
-    updatedAt: cache.coverLetterUpdatedAt || null,
-  };
+  return buildDocumentStatus(getCoverLetterDocument());
 }
 
-export function saveTailoredCoverLetter(jobId: string, letterText: string) {
+export function getCoverLetterDocument(jobId?: string): StoredTexDocument | null {
+  return getCoverLetterDocumentFromCache(readResumeCache(), jobId);
+}
+
+export function getCoverLetterTextForPrompt(jobId?: string): string {
+  return extractPlainTextFromDocument(getCoverLetterDocument(jobId)?.texSource || "");
+}
+
+export function saveTailoredCoverLetter(jobId: string, letterText: string, options?: { fileName?: string }) {
   const cache = readResumeCache();
   const now = new Date().toISOString();
+  const document = buildStoredDocument(
+    letterText,
+    options?.fileName || `${jobId}-cover-letter.tex`,
+    now
+  );
   writeResumeCache({
     ...cache,
     tailoredCoverLetters: {
@@ -365,10 +576,17 @@ export function saveTailoredCoverLetter(jobId: string, letterText: string) {
         updatedAt: now,
       },
     },
+    tailoredCoverLetterDocuments: {
+      ...cache.tailoredCoverLetterDocuments,
+      [jobId]: document,
+    },
   });
 }
 
 export function loadTailoredCoverLetter(jobId: string): string | null {
-  const cache = readResumeCache();
-  return cache.tailoredCoverLetters[jobId]?.text || null;
+  return getCoverLetterDocument(jobId)?.texSource || null;
+}
+
+export function getCoverLetterDocumentStatus(jobId?: string) {
+  return buildDocumentStatus(getCoverLetterDocument(jobId));
 }

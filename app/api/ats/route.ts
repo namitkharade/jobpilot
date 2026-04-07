@@ -1,6 +1,8 @@
 import { getAllJobs, updateJob } from "@/lib/job-store";
 import { getConfig } from "@/lib/local-store";
-import { loadResumeCache, loadTailoredResume } from "@/lib/openai";
+import { compileTex } from "@/lib/latex";
+import { getResumeDocument } from "@/lib/openai";
+import { extractPdfText } from "@/lib/pdf";
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 
@@ -9,13 +11,13 @@ export const runtime = "nodejs";
 // Remove global client to ensure we always use the latest config-based API key
 // const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 
-const SYSTEM_PROMPT = `You are an expert ATS (Applicant Tracking System) analyst and resume coach with 15 years of experience in technical recruiting. Your job is to deeply analyze the match between a resume and a job description. You always respond in valid JSON only. Respond with ONLY a valid JSON object.`;
+const SYSTEM_PROMPT = `You are an expert ATS (Applicant Tracking System) analyst and resume coach with 15 years of experience in technical recruiting. Your job is to deeply analyze the match between a resume and a job description. The resume text comes from text extracted from the compiled PDF, so suggestions must be guidance for improving the source resume rather than exact editor patches. You always respond in valid JSON only. Respond with ONLY a valid JSON object.`;
 
-function buildUserPrompt(resumeText: string, jobDescription: string) {
-  return `Analyze the ATS match between the following resume and job description.
+function buildUserPrompt(resumePdfText: string, jobDescription: string) {
+  return `Analyze the ATS match between the following PDF-extracted resume text and job description.
 
-RESUME:
-${resumeText}
+RESUME PDF TEXT:
+${resumePdfText}
 
 JOB DESCRIPTION:
 ${jobDescription}
@@ -28,7 +30,7 @@ Respond with ONLY this JSON structure:
   "suggestions": [
     {
       "section": <"summary"|"experience"|"skills"|"education">,
-      "bulletIndex": <number>,
+      "bulletIndex": <-1>,
       "original": <string>,
       "suggested": <string>,
       "reason": <string>,
@@ -42,7 +44,7 @@ Respond with ONLY this JSON structure:
     "formatQuality": <number 0-100>
   },
   "topMissingSkills": [<string array>],
-  "summary": <string>
+  "summary": <string mentioning that the analysis reflects the compiled PDF text>
 }`;
 }
 
@@ -59,12 +61,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const finalResumeText = loadTailoredResume(jobId) || loadResumeCache();
+    const finalResumeSource = getResumeDocument(jobId)?.texSource || getResumeDocument()?.texSource;
 
-    if (!finalResumeText) {
+    if (!finalResumeSource) {
       return NextResponse.json(
-        { success: false, error: "No resume text found in cache" },
+        { success: false, error: "No saved resume template or job-specific draft found" },
         { status: 400 }
+      );
+    }
+
+    let resumePdfText = "";
+    try {
+      const pdfBuffer = await compileTex(finalResumeSource);
+      resumePdfText = await extractPdfText(pdfBuffer);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to compile or parse resume PDF";
+      return NextResponse.json(
+        { success: false, error: `ATS requires a valid compiled resume PDF: ${message}` },
+        { status: 422 }
       );
     }
 
@@ -85,7 +99,7 @@ export async function POST(req: NextRequest) {
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: buildUserPrompt(finalResumeText, jobDescription) }
+        { role: "user", content: buildUserPrompt(resumePdfText, jobDescription) }
       ],
       max_tokens: 2000
     });

@@ -1,8 +1,8 @@
 import { buildCoverLetterTex } from "@/lib/cover-letter";
 import { compileTex } from "@/lib/latex";
 import {
-    getCoverLetterCacheStatus,
-    loadTailoredCoverLetter,
+    getCoverLetterDocument,
+    looksLikeTex,
 } from "@/lib/openai";
 import { NextResponse } from "next/server";
 
@@ -22,9 +22,9 @@ export async function POST(request: Request) {
     if (body.coverLetterText?.trim()) {
       content = body.coverLetterText;
     } else if (body.jobId?.trim()) {
-      content = loadTailoredCoverLetter(body.jobId) || "";
+      content = getCoverLetterDocument(body.jobId)?.texSource || getCoverLetterDocument()?.texSource || "";
     } else {
-      content = getCoverLetterCacheStatus().text;
+      content = getCoverLetterDocument()?.texSource || "";
     }
 
     if (!content.trim()) {
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const tex = buildCoverLetterTex(content);
+    const tex = looksLikeTex(content) ? content : buildCoverLetterTex(content);
     const pdfBuffer = await compileTex(tex);
 
     return NextResponse.json({

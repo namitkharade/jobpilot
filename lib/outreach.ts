@@ -10,7 +10,12 @@ import {
 } from "@/types";
 import { getSelectedRecruiterCandidate, projectLegacyRecruiterFields } from "./job-normalize";
 import { getPreferredChannel } from "./recruiter-intelligence";
-import { getOpenAIModel, getResumeCacheStatus, runStructuredResponse } from "./openai";
+import {
+  getOpenAIModel,
+  getResumeDocumentStatus,
+  getResumeTextForPrompt,
+  runStructuredResponse,
+} from "./openai";
 
 const DEFAULT_TONES = ["professional", "conversational", "direct"] as const;
 
@@ -123,8 +128,9 @@ async function buildOutreachBrief(
 ): Promise<OutreachBrief | null> {
   if (channel === "blocked") return null;
 
-  const resume = getResumeCacheStatus();
-  const briefKey = buildBriefKey(job, candidate.id, channel, resume.updatedAt || "");
+  const resumeStatus = getResumeDocumentStatus(job.id);
+  const resumeText = getResumeTextForPrompt(job.id) || getResumeTextForPrompt();
+  const briefKey = buildBriefKey(job, candidate.id, channel, resumeStatus.updatedAt || "");
   if (!forceRefreshBrief && job.outreach.brief && job.outreach.brief.key === briefKey) {
     return job.outreach.brief;
   }
@@ -146,7 +152,7 @@ async function buildOutreachBrief(
         `Role: ${job.title} at ${job.company}`,
         `Channel: ${channel}`,
         `Candidate: ${candidate.name}, ${candidate.title}`,
-        `Resume summary:\n${resume.text.slice(0, 6000) || "Not available"}`,
+        `Resume summary:\n${resumeText.slice(0, 6000) || "Not available"}`,
         `ATS keyword gaps: ${job.atsKeywordGaps.join(", ") || "Not available"}`,
         `ATS suggestions: ${(job.atsSuggestions || []).map((suggestion) => suggestion.suggested).slice(0, 4).join(" | ") || "Not available"}`,
         `Job description:\n${job.jobDescription.slice(0, 8000)}`,
@@ -179,7 +185,7 @@ async function buildOutreachBrief(
       candidateId: candidate.id,
       channel,
       summary: `${job.title} at ${job.company}`,
-      highlights: (resume.text || "")
+      highlights: (resumeText || "")
         .split("\n")
         .map((line) => line.trim())
         .filter((line) => line.length > 10)

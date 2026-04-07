@@ -1,35 +1,32 @@
-import { getResumeCachePath, getResumeCacheStatus } from "@/lib/openai";
-import fs from "fs";
+import { clearResumeCache, getResumeDocumentStatus } from "@/lib/openai";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  const status = getResumeCacheStatus();
+  const status = getResumeDocumentStatus();
 
   return NextResponse.json({
     success: true,
     data: {
-      loaded: status.loaded,
-      characterCount: status.characterCount,
-      text: status.text,
-      updatedAt: status.updatedAt,
+      ...status,
     },
   });
 }
 
 export async function DELETE() {
   try {
-    const path = getResumeCachePath();
-    if (fs.existsSync(path)) {
-      fs.unlinkSync(path);
-    }
+    clearResumeCache();
 
     return NextResponse.json({
       success: true,
       data: {
         loaded: false,
         characterCount: 0,
+        text: "",
+        texSource: "",
+        fileName: null,
+        updatedAt: null,
       },
     });
   } catch (error) {

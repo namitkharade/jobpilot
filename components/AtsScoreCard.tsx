@@ -25,7 +25,7 @@ export default function AtsScoreCard({ result, loading, onAnalyze }: AtsScoreCar
           </span>
         </div>
         <p className="text-zinc-600 text-sm mb-4">
-          Upload your resume to analyze ATS compatibility with this job.
+          Save a base resume template to analyze ATS compatibility with this job.
         </p>
         {onAnalyze && (
           <button

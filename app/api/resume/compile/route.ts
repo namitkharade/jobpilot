@@ -1,5 +1,5 @@
 import { compileTex } from "@/lib/latex";
-import { loadResumeCache, loadTailoredResume } from "@/lib/openai";
+import { getResumeDocument } from "@/lib/openai";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -18,12 +18,12 @@ export async function POST(request: Request) {
     if (body.texSource) {
       source = body.texSource;
     } else if (body.jobId) {
-      source = loadTailoredResume(body.jobId);
+      source = getResumeDocument(body.jobId)?.texSource || getResumeDocument()?.texSource || null;
       if (!source) {
         return NextResponse.json({ success: false, error: "Tailored resume not found" }, { status: 404 });
       }
     } else {
-      source = loadResumeCache();
+      source = getResumeDocument()?.texSource || null;
       if (!source) {
         return NextResponse.json({ success: false, error: "No resume found" }, { status: 400 });
       }

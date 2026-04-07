@@ -4,6 +4,7 @@ import ApplicationAssistant from "@/components/ApplicationAssistant";
 import AtsScoreCard from "@/components/AtsScoreCard";
 import OutreachComposer from "@/components/OutreachComposer";
 import RecruiterPanel from "@/components/RecruiterPanel";
+import TexDocumentWorkspace from "@/components/TexDocumentWorkspace";
 import { useToast } from "@/components/ToastProvider";
 import { STATUS_OPTIONS, getStatusClasses, getStatusLabel } from "@/lib/job-status";
 import { AtsResult, AtsSuggestion, JobListing } from "@/types";
@@ -40,18 +41,7 @@ interface ApplyResumeResponse {
   success: boolean;
   data?: {
     tailoredResume: string;
-  };
-  error?: string;
-}
-
-interface CoverLetterResponse {
-  success: boolean;
-  data?: {
-    loaded: boolean;
-    characterCount: number;
-    text: string;
-    updatedAt: string | null;
-    tailoredText?: string | null;
+    fileName?: string;
   };
   error?: string;
 }
@@ -60,25 +50,11 @@ interface GenerateCoverLetterResponse {
   success: boolean;
   data?: {
     coverLetterText: string;
+    fileName?: string;
     usedBaseCoverLetter: boolean;
   };
   error?: string;
 }
-
-interface CompileResumeResponse {
-  success: boolean;
-  pdfBase64?: string;
-  error?: string;
-}
-
-const buildPdfBlob = (base64: string) => {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new Blob([bytes], { type: "application/pdf" });
-};
 
 const SOURCE_STYLES: Record<string, string> = {
   linkedin: "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300",
@@ -102,7 +78,7 @@ function buildAtsResultFromJob(job: JobListing): AtsResult | null {
       formatQuality: 0,
     },
     topMissingSkills: job.atsKeywordGaps || [],
-    summary: "ATS score loaded from your saved job data.",
+    summary: "ATS score loaded from the latest compiled PDF analysis for this job.",
   };
 }
 
@@ -121,31 +97,17 @@ export default function JobDetailPage() {
 
   const [atsLoading, setAtsLoading] = useState(false);
   const [atsResult, setAtsResult] = useState<AtsResult | null>(null);
-
   const [, setSuggestionsLoading] = useState(false);
   const [, setSuggestionsError] = useState<string | null>(null);
   const [, setAtsSuggestions] = useState<AtsSuggestion[]>([]);
 
-  const [applyingChanges, setApplyingChanges] = useState(false);
-  const [applyingSingleIndex, setApplyingSingleIndex] = useState<number | null>(null);
-  const [tailoredResume, setTailoredResume] = useState<string | null>(null);
-  const [showTailoredModal, setShowTailoredModal] = useState(false);
-  const [tailoredPdfBase64, setTailoredPdfBase64] = useState<string | null>(null);
-  const [tailoredPdfLoading, setTailoredPdfLoading] = useState(false);
-  const [tailoredPdfError, setTailoredPdfError] = useState<string | null>(null);
-  const [tailoredPdfUrl, setTailoredPdfUrl] = useState<string | null>(null);
-
+  const [resumeDraftLoading, setResumeDraftLoading] = useState(false);
+  const [resumeWorkspaceRefreshToken, setResumeWorkspaceRefreshToken] = useState(0);
+  const [coverLetterLoading, setCoverLetterLoading] = useState(false);
+  const [coverLetterUsedBase, setCoverLetterUsedBase] = useState(false);
+  const [coverLetterWorkspaceRefreshToken, setCoverLetterWorkspaceRefreshToken] = useState(0);
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [researchToken, setResearchToken] = useState(0);
-
-  const [coverLetterText, setCoverLetterText] = useState("");
-  const [coverLetterLoading, setCoverLetterLoading] = useState(false);
-  const [coverLetterSaving, setCoverLetterSaving] = useState(false);
-  const [coverLetterUsedBase, setCoverLetterUsedBase] = useState(false);
-  const [coverLetterPdfBase64, setCoverLetterPdfBase64] = useState<string | null>(null);
-  const [coverLetterPdfLoading, setCoverLetterPdfLoading] = useState(false);
-  const [coverLetterPdfError, setCoverLetterPdfError] = useState<string | null>(null);
-  const [coverLetterPdfUrl, setCoverLetterPdfUrl] = useState<string | null>(null);
 
   const loadJob = useCallback(async () => {
     try {
@@ -199,65 +161,6 @@ export default function JobDetailPage() {
     loadAtsSuggestions();
   }, [loadAtsSuggestions, loadJob]);
 
-  useEffect(() => {
-    if (!job) return;
-
-    fetch(`/api/cover-letter?jobId=${encodeURIComponent(job.id)}`, { cache: "no-store" })
-      .then((res) => res.json() as Promise<CoverLetterResponse>)
-      .then((body) => {
-        if (body.success && body.data) {
-          setCoverLetterText(body.data.tailoredText || body.data.text || "");
-          setCoverLetterUsedBase(Boolean(body.data.text?.trim()));
-        }
-      })
-      .catch(() => {});
-  }, [job]);
-
-  const tailoredPdfBlob = useMemo(() => {
-    if (!tailoredPdfBase64) return null;
-    return buildPdfBlob(tailoredPdfBase64);
-  }, [tailoredPdfBase64]);
-
-  useEffect(() => {
-    if (!tailoredPdfBlob) {
-      setTailoredPdfUrl(null);
-      return;
-    }
-
-    const url = URL.createObjectURL(tailoredPdfBlob);
-    setTailoredPdfUrl(url);
-
-    return () => {
-      URL.revokeObjectURL(url);
-    };
-  }, [tailoredPdfBlob]);
-
-  useEffect(() => {
-    if (!showTailoredModal) {
-      setTailoredPdfBase64(null);
-      setTailoredPdfError(null);
-    }
-  }, [showTailoredModal]);
-
-  const coverLetterPdfBlob = useMemo(() => {
-    if (!coverLetterPdfBase64) return null;
-    return buildPdfBlob(coverLetterPdfBase64);
-  }, [coverLetterPdfBase64]);
-
-  useEffect(() => {
-    if (!coverLetterPdfBlob) {
-      setCoverLetterPdfUrl(null);
-      return;
-    }
-
-    const url = URL.createObjectURL(coverLetterPdfBlob);
-    setCoverLetterPdfUrl(url);
-
-    return () => {
-      URL.revokeObjectURL(url);
-    };
-  }, [coverLetterPdfBlob]);
-
   const runAts = useCallback(
     async (targetJob: JobListing) => {
       setAtsLoading(true);
@@ -275,7 +178,14 @@ export default function JobDetailPage() {
         if (data.success && data.data) {
           setAtsResult(data.data);
           setJob((prev) =>
-            prev ? { ...prev, atsScore: data.data!.score, atsSuggestions: data.data!.suggestions || [] } : prev
+            prev
+              ? {
+                  ...prev,
+                  atsScore: data.data!.score,
+                  atsKeywordGaps: data.data!.missingKeywords || [],
+                  atsSuggestions: data.data!.suggestions || [],
+                }
+              : prev
           );
           setAtsSuggestions(data.data.suggestions || []);
           setSuggestionsError(null);
@@ -292,85 +202,76 @@ export default function JobDetailPage() {
     [toast]
   );
 
-  const compileTailoredPdf = useCallback(async () => {
+  const generateResumeDraft = useCallback(async () => {
     if (!job) return;
-    setTailoredPdfLoading(true);
-    setTailoredPdfError(null);
 
-    try {
-      const res = await fetch("/api/resume/compile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId: job.id }),
-      });
-      const data = (await res.json()) as CompileResumeResponse;
-
-      if (!res.ok || !data.success || !data.pdfBase64) {
-        throw new Error(data.error || "Compilation failed");
-      }
-
-      setTailoredPdfBase64(data.pdfBase64);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Compilation failed";
-      setTailoredPdfError(message);
-      setTailoredPdfBase64(null);
-    } finally {
-      setTailoredPdfLoading(false);
-    }
-  }, [job]);
-
-  const downloadPdf = (base64: string, filePrefix = "resume-tailored") => {
-    const blob = buildPdfBlob(base64);
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const fileName = `${filePrefix}-${job?.company ?? "company"}-${job?.title ?? "role"}.pdf`.replace(
-      /\s+/g,
-      "-"
-    );
-    link.href = url;
-    link.download = fileName;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleApplyChanges = useCallback(async (suggestionIndex?: number) => {
-    if (!job) return;
-    if (typeof suggestionIndex === "number") {
-      setApplyingSingleIndex(suggestionIndex);
-    } else {
-      setApplyingChanges(true);
-    }
+    setResumeDraftLoading(true);
     try {
       const res = await fetch("/api/resume/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          typeof suggestionIndex === "number"
-            ? { jobId: job.id, suggestionIndex }
-            : { jobId: job.id }
-        ),
+        body: JSON.stringify({ jobId: job.id }),
       });
       const data = (await res.json()) as ApplyResumeResponse;
+
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to apply changes");
+        throw new Error(data.error || "Failed to generate job-specific CV draft");
       }
-      setTailoredResume(data.data?.tailoredResume ?? null);
-      toast(
-        typeof suggestionIndex === "number"
-          ? "Suggestion applied and saved"
-          : "Tailored resume saved for this job",
-        "success"
-      );
-    } catch (err: unknown) {
-      toast(err instanceof Error ? err.message : "Failed to apply changes", "error");
+
+      setResumeWorkspaceRefreshToken((value) => value + 1);
+      toast("Job-specific CV draft generated", "success");
+    } catch (error: unknown) {
+      toast(error instanceof Error ? error.message : "Failed to generate job-specific CV draft", "error");
     } finally {
-      if (typeof suggestionIndex === "number") {
-        setApplyingSingleIndex(null);
-      } else {
-        setApplyingChanges(false);
-      }
+      setResumeDraftLoading(false);
     }
   }, [job, toast]);
+
+  const generateCoverLetter = useCallback(async () => {
+    if (!job) return;
+
+    setCoverLetterLoading(true);
+    try {
+      const res = await fetch("/api/cover-letter/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id }),
+      });
+      const data = (await res.json()) as GenerateCoverLetterResponse;
+
+      if (!res.ok || !data.success || !data.data) {
+        throw new Error(data.error || "Failed to generate cover letter");
+      }
+
+      setCoverLetterUsedBase(data.data.usedBaseCoverLetter);
+      setCoverLetterWorkspaceRefreshToken((value) => value + 1);
+      toast("Job-specific cover letter generated", "success");
+    } catch (error: unknown) {
+      toast(error instanceof Error ? error.message : "Failed to generate cover letter", "error");
+    } finally {
+      setCoverLetterLoading(false);
+    }
+  }, [job, toast]);
+
+  const saveTemplateCopy = useCallback(
+    async (url: string, payload: { texSource: string; fileName: string }, label: string) => {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = (await res.json()) as { success: boolean; error?: string };
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || `Failed to save ${label}`);
+        }
+        toast(`${label} updated`, "success");
+      } catch (error: unknown) {
+        toast(error instanceof Error ? error.message : `Failed to save ${label}`, "error");
+      }
+    },
+    [toast]
+  );
 
   const handleStatusChange = useCallback(
     async (nextStatus: JobListing["status"]) => {
@@ -398,83 +299,12 @@ export default function JobDetailPage() {
     [job, toast]
   );
 
-  const generateCoverLetter = useCallback(async () => {
-    if (!job) return;
-    setCoverLetterLoading(true);
-    try {
-      const res = await fetch("/api/cover-letter/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId: job.id }),
-      });
-      const data = (await res.json()) as GenerateCoverLetterResponse;
-      if (!res.ok || !data.success || !data.data) {
-        throw new Error(data.error || "Failed to generate cover letter");
-      }
-
-      setCoverLetterText(data.data.coverLetterText);
-      setCoverLetterUsedBase(data.data.usedBaseCoverLetter);
-      setCoverLetterPdfBase64(null);
-      setCoverLetterPdfError(null);
-      toast("Cover letter generated", "success");
-    } catch (error: unknown) {
-      toast(error instanceof Error ? error.message : "Failed to generate cover letter", "error");
-    } finally {
-      setCoverLetterLoading(false);
-    }
-  }, [job, toast]);
-
-  const saveCoverLetter = useCallback(async () => {
-    if (!coverLetterText.trim()) {
-      toast("Cover letter is empty", "info");
-      return;
-    }
-
-    setCoverLetterSaving(true);
-    try {
-      const res = await fetch("/api/cover-letter", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ coverLetterText }),
-      });
-      const data = (await res.json()) as { success: boolean; error?: string };
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to save cover letter");
-      }
-      toast("Base cover letter updated", "success");
-    } catch (error: unknown) {
-      toast(error instanceof Error ? error.message : "Failed to save cover letter", "error");
-    } finally {
-      setCoverLetterSaving(false);
-    }
-  }, [coverLetterText, toast]);
-
-  const compileCoverLetterPdf = useCallback(async () => {
-    setCoverLetterPdfLoading(true);
-    setCoverLetterPdfError(null);
-    try {
-      const res = await fetch("/api/cover-letter/compile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ coverLetterText }),
-      });
-      const data = (await res.json()) as CompileResumeResponse;
-      if (!res.ok || !data.success || !data.pdfBase64) {
-        throw new Error(data.error || "Compilation failed");
-      }
-      setCoverLetterPdfBase64(data.pdfBase64);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Compilation failed";
-      setCoverLetterPdfError(message);
-      setCoverLetterPdfBase64(null);
-    } finally {
-      setCoverLetterPdfLoading(false);
-    }
-  }, [coverLetterText]);
-
   const hasRecruiter = useMemo(() => {
     if (!job) return false;
-    return job.recruiterCandidates.length > 0 || Boolean(job.recruiterName || job.recruiterEmail || job.recruiterProfileUrl);
+    return (
+      job.recruiterCandidates.length > 0 ||
+      Boolean(job.recruiterName || job.recruiterEmail || job.recruiterProfileUrl)
+    );
   }, [job]);
 
   if (loading) {
@@ -498,6 +328,8 @@ export default function JobDetailPage() {
       </main>
     );
   }
+
+  const hasAtsGuidance = Boolean(job.atsScore !== null || job.atsSuggestions.length || job.atsKeywordGaps.length);
 
   return (
     <main className="p-4 md:p-7">
@@ -536,7 +368,7 @@ export default function JobDetailPage() {
                 <span className="text-zinc-500">Status:</span>
                 <select
                   value={job.status}
-                  onChange={(e) => handleStatusChange(e.target.value as JobListing["status"])}
+                  onChange={(event) => handleStatusChange(event.target.value as JobListing["status"])}
                   disabled={statusSaving}
                   className={clsx("h-8 rounded-md border px-2 text-xs font-medium", getStatusClasses(job.status))}
                 >
@@ -640,76 +472,87 @@ export default function JobDetailPage() {
               )}
 
               {analyzeView === "improve" && (
-                <div className="space-y-3">
-                  {!job.atsSuggestions || job.atsSuggestions.length === 0 ? (
+                <div className="space-y-4">
+                  {!hasAtsGuidance ? (
                     <div className="rounded-md border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
-                      No suggestions yet. Run the ATS Score analysis first.
+                      Run ATS Score first. The improvement guidance is based on the text extracted from the compiled PDF version of your resume.
                     </div>
                   ) : (
                     <>
-                      <button
-                        onClick={() => handleApplyChanges()}
-                        disabled={applyingChanges}
-                        className="h-9 w-full rounded-md bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-                      >
-                        {applyingChanges ? "Applying..." : "Apply All Changes"}
-                      </button>
-
-                      {tailoredResume && (
-                        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm dark:border-emerald-900/50 dark:bg-emerald-950/30">
-                          <p className="font-medium text-emerald-800 dark:text-emerald-400">
-                            Tailored resume saved for this job.
-                          </p>
+                      <div className="rounded-lg border border-zinc-200 bg-[var(--surface)] p-4 dark:border-zinc-800">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h3 className="text-sm font-semibold">ATS Guidance</h3>
+                            <p className="text-xs text-zinc-500">
+                              These recommendations are derived from the compiled PDF text. Review them as guidance before regenerating or editing the job-specific CV.
+                            </p>
+                          </div>
                           <button
-                            onClick={() => setShowTailoredModal(true)}
-                            className="mt-1 text-xs text-emerald-700 underline dark:text-emerald-400"
+                            onClick={generateResumeDraft}
+                            disabled={resumeDraftLoading}
+                            className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
                           >
-                            View Tailored Resume
+                            {resumeDraftLoading ? "Generating..." : "Generate Job CV Draft"}
                           </button>
                         </div>
-                      )}
 
-                      <div className="space-y-2">
-                        {job.atsSuggestions.map((suggestion, index) => (
-                          <div
-                            key={index}
-                            className="rounded-lg border border-zinc-200 bg-[var(--surface)] p-3 text-xs dark:border-zinc-800"
-                          >
-                            <div className="mb-1 flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-2">
-                              <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                                {suggestion.section}
-                              </span>
-                              {suggestion.keywordsAdded?.map((kw) => (
-                                <span
-                                  key={kw}
-                                  className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/30 dark:text-blue-400"
-                                >
-                                  +{kw}
+                        <div className="space-y-2">
+                          {job.atsSuggestions.map((suggestion, index) => (
+                            <div
+                              key={`${suggestion.section}_${index}`}
+                              className="rounded-lg border border-zinc-200 bg-[var(--surface)] p-3 text-xs dark:border-zinc-800"
+                            >
+                              <div className="mb-1 flex flex-wrap items-center gap-2">
+                                <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                                  {suggestion.section}
                                 </span>
-                              ))}
+                                {suggestion.keywordsAdded?.map((keyword) => (
+                                  <span
+                                    key={keyword}
+                                    className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/30 dark:text-blue-400"
+                                  >
+                                    +{keyword}
+                                  </span>
+                                ))}
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => handleApplyChanges(index)}
-                                disabled={applyingSingleIndex === index}
-                                className="inline-flex h-6 w-6 items-center justify-center rounded border border-zinc-200 text-[10px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                                aria-label="Apply this suggestion"
-                                title="Apply this suggestion"
-                              >
-                                {applyingSingleIndex === index ? "..." : ">"}
-                              </button>
+                              {suggestion.original ? (
+                                <p className="mb-1 text-zinc-400 line-through dark:text-zinc-600">{suggestion.original}</p>
+                              ) : null}
+                              <p className="text-zinc-800 dark:text-zinc-200">{suggestion.suggested}</p>
+                              <p className="mt-1 text-zinc-500 italic">{suggestion.reason}</p>
                             </div>
-                            <p className="mb-1 text-zinc-400 line-through dark:text-zinc-600">
-                              {suggestion.original}
-                            </p>
-                            <p className="text-zinc-800 dark:text-zinc-200">
-                              {suggestion.suggested}
-                            </p>
-                            <p className="mt-1 text-zinc-500 italic">{suggestion.reason}</p>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
                       </div>
+
+                      <TexDocumentWorkspace
+                        title="Job-Specific CV"
+                        description="This draft is scoped to this job. Edit the TeX, save it, and the PDF preview will refresh from the saved version."
+                        documentLabel="Job CV"
+                        fetchUrl="/api/resume"
+                        saveUrl="/api/resume"
+                        compileUrl="/api/resume/compile"
+                        queryJobId={job.id}
+                        fileNameFallback={`${job.company}-${job.title}-resume.tex`}
+                        saveLabel="Save Job CV Draft"
+                        refreshToken={resumeWorkspaceRefreshToken}
+                        actions={({ texSource, fileName, loading: workspaceLoading }) => (
+                          <button
+                            type="button"
+                            disabled={workspaceLoading || !texSource.trim()}
+                            onClick={() =>
+                              saveTemplateCopy(
+                                "/api/resume",
+                                { texSource, fileName: fileName || `${job.company}-${job.title}-resume.tex` },
+                                "Base resume template"
+                              )
+                            }
+                            className="h-9 rounded-md border border-zinc-200 bg-white px-3 text-sm hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                          >
+                            Save as Base Template
+                          </button>
+                        )}
+                      />
                     </>
                   )}
                 </div>
@@ -718,69 +561,62 @@ export default function JobDetailPage() {
           )}
 
           {activeTab === "coverLetter" && (
-            <div className="space-y-3 rounded-lg border border-zinc-200 bg-[var(--surface)] p-4 dark:border-zinc-800">
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={generateCoverLetter}
-                  disabled={coverLetterLoading}
-                  className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-                >
-                  {coverLetterLoading ? "Generating..." : "Generate for this Job"}
-                </button>
-                <button
-                  onClick={saveCoverLetter}
-                  disabled={coverLetterSaving || !coverLetterText.trim()}
-                  className="h-9 rounded-md border border-zinc-200 px-3 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                >
-                  {coverLetterSaving ? "Saving..." : "Save as Base"}
-                </button>
-                <button
-                  onClick={compileCoverLetterPdf}
-                  disabled={coverLetterPdfLoading || !coverLetterText.trim()}
-                  className="h-9 rounded-md border border-zinc-200 px-3 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                >
-                  {coverLetterPdfLoading ? "Compiling..." : "Generate PDF"}
-                </button>
-                {coverLetterPdfBase64 && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-zinc-200 bg-[var(--surface)] p-4 dark:border-zinc-800">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">Generate Job Cover Letter</h3>
+                    <p className="text-xs text-zinc-500">
+                      {coverLetterUsedBase
+                        ? "The last generated draft reused your saved base cover letter template."
+                        : "Generate a job-specific cover letter from your base template or a default letter layout."}
+                    </p>
+                  </div>
                   <button
-                    onClick={() => downloadPdf(coverLetterPdfBase64, "cover-letter")}
-                    className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+                    onClick={generateCoverLetter}
+                    disabled={coverLetterLoading}
+                    className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
                   >
-                    Download PDF
+                    {coverLetterLoading ? "Generating..." : "Generate for this Job"}
                   </button>
-                )}
+                </div>
               </div>
 
-              <p className="text-xs text-zinc-500">
-                {coverLetterUsedBase
-                  ? "Generation uses your saved base cover letter when available."
-                  : "No base cover letter found; generation starts from scratch."}
-              </p>
-
-              <textarea
-                value={coverLetterText}
-                onChange={(event) => setCoverLetterText(event.target.value)}
-                placeholder="Generate or write a cover letter for this job"
-                className="min-h-[280px] w-full rounded-md border border-zinc-200 bg-white p-3 text-sm text-zinc-900 outline-none ring-zinc-300 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              <TexDocumentWorkspace
+                title="Job-Specific Cover Letter"
+                description="Edit this cover letter before saving and compiling. The PDF preview always reflects the latest saved job-specific draft."
+                documentLabel="Cover Letter"
+                fetchUrl="/api/cover-letter"
+                saveUrl="/api/cover-letter"
+                compileUrl="/api/cover-letter/compile"
+                queryJobId={job.id}
+                fileNameFallback={`${job.company}-${job.title}-cover-letter.tex`}
+                saveLabel="Save Job Cover Letter"
+                refreshToken={coverLetterWorkspaceRefreshToken}
+                actions={({ texSource, fileName, loading: workspaceLoading }) => (
+                  <button
+                    type="button"
+                    disabled={workspaceLoading || !texSource.trim()}
+                    onClick={() =>
+                      saveTemplateCopy(
+                        "/api/cover-letter",
+                        { texSource, fileName: fileName || `${job.company}-${job.title}-cover-letter.tex` },
+                        "Base cover letter template"
+                      )
+                    }
+                    className="h-9 rounded-md border border-zinc-200 bg-white px-3 text-sm hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                  >
+                    Save as Base Template
+                  </button>
+                )}
               />
-
-              {coverLetterPdfError && <p className="text-xs text-rose-600">{coverLetterPdfError}</p>}
-
-              {coverLetterPdfUrl && (
-                <iframe
-                  title="Cover letter PDF preview"
-                  src={coverLetterPdfUrl}
-                  className="w-full rounded-md border border-zinc-200 dark:border-zinc-800"
-                  height="560px"
-                />
-              )}
             </div>
           )}
 
           {activeTab === "recruiters" && (
             <div className="space-y-3">
               <button
-                onClick={() => setResearchToken((v) => v + 1)}
+                onClick={() => setResearchToken((value) => value + 1)}
                 className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
               >
                 Research Recruiters
@@ -816,53 +652,6 @@ export default function JobDetailPage() {
           )}
         </section>
       </div>
-
-      {showTailoredModal && tailoredResume && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg border border-zinc-200 bg-[var(--surface)] shadow-xl dark:border-zinc-800">
-            <div className="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-800">
-              <h2 className="text-sm font-semibold">Tailored Resume</h2>
-              <button
-                onClick={() => setShowTailoredModal(false)}
-                className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-              >
-                Close
-              </button>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200 p-3 text-xs dark:border-zinc-800">
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={compileTailoredPdf}
-                  disabled={tailoredPdfLoading}
-                  className="h-9 rounded-md border border-zinc-200 px-3 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                >
-                  {tailoredPdfLoading ? "Compiling..." : "Generate PDF"}
-                </button>
-                {tailoredPdfBase64 && (
-                  <button
-                    onClick={() => downloadPdf(tailoredPdfBase64)}
-                    className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-                  >
-                    Download PDF
-                  </button>
-                )}
-              </div>
-              {tailoredPdfError && <p className="text-xs text-zinc-500">{tailoredPdfError}</p>}
-            </div>
-            <pre className="flex-1 overflow-auto p-4 font-mono text-sm whitespace-pre-wrap text-zinc-800 dark:text-zinc-200">
-              {tailoredResume}
-            </pre>
-            {tailoredPdfBase64 && tailoredPdfUrl && (
-              <iframe
-                title="Tailored resume PDF preview"
-                src={tailoredPdfUrl}
-                className="w-full rounded-md border border-zinc-200 dark:border-zinc-800 mt-3"
-                height="600px"
-              />
-            )}
-          </div>
-        </div>
-      )}
     </main>
   );
 }
