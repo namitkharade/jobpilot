@@ -1,5 +1,6 @@
 import { getConfig, maskSecret, saveConfig } from "@/lib/local-store";
 import { getResumeCacheStatus } from "@/lib/openai";
+import { assertSafeExternalUrl } from "@/lib/url-safety";
 import axios from "axios";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -14,6 +15,17 @@ const SERVICE_TO_CONFIG_KEY = {
   gmailclientid: "gmailClientId",
   gmailclientsecret: "gmailClientSecret",
 } as const;
+
+async function normalizeSearXNGUrl(rawUrl: string): Promise<string> {
+  const allowPrivateHosts = process.env.NODE_ENV !== "production";
+  const url = await assertSafeExternalUrl(rawUrl, { allowPrivateHosts });
+
+  url.hash = "";
+  url.search = "";
+  url.pathname = url.pathname.replace(/\/+$/, "");
+
+  return url.toString().replace(/\/+$/, "");
+}
 
 export async function GET() {
   const config = getConfig();
@@ -76,7 +88,7 @@ export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
     const service = String(body?.service || "").toLowerCase();
-    const key = String(body?.key || "").trim();
+    let key = String(body?.key || "").trim();
 
     if (!service) {
       return NextResponse.json({ success: false, error: "Missing service or key" }, { status: 400 });
@@ -89,6 +101,10 @@ export async function PUT(req: NextRequest) {
 
     if (!key && service !== "searxng") {
       return NextResponse.json({ success: false, error: "Missing service or key" }, { status: 400 });
+    }
+
+    if (service === "searxng" && key) {
+      key = await normalizeSearXNGUrl(key);
     }
 
     const current = getConfig();
@@ -158,7 +174,8 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (service === "searxng") {
-      const res = await axios.get(`${token}/search`, {
+      const safeBaseUrl = await normalizeSearXNGUrl(token);
+      const res = await axios.get(`${safeBaseUrl}/search`, {
         params: { q: "test", format: "json" },
         timeout: 5000,
       });

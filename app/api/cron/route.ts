@@ -16,6 +16,14 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export async function GET() {
   const config = getConfig();
+  const secret = process.env.CRON_SECRET || config.apiKeys.cronSecret;
+  if (process.env.NODE_ENV === "production" && !secret) {
+    return NextResponse.json(
+      { success: false, error: "CRON_SECRET must be configured in production" },
+      { status: 503 }
+    );
+  }
+
   return NextResponse.json({
     success: true,
     data: {
@@ -32,6 +40,14 @@ export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   const config = getConfig();
   const secret = process.env.CRON_SECRET || config.apiKeys.cronSecret;
+
+  if (process.env.NODE_ENV === "production" && !secret) {
+    return NextResponse.json(
+      { success: false, error: "CRON_SECRET must be configured in production" },
+      { status: 503 }
+    );
+  }
+
   if (secret && authHeader !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

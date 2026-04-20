@@ -1,5 +1,6 @@
 import { runStructuredResponse } from "@/lib/openai";
 import { JobImportDraft, JobImportMethod, JobSource } from "@/types";
+import { assertSafeExternalUrl } from "./url-safety";
 
 const FETCH_TIMEOUT_MS = 12000;
 const MAX_HTML_CHARS = 500_000;
@@ -694,12 +695,20 @@ async function extractWithAiFallback(url: string, draft: JobImportDraft, html: s
 }
 
 async function fetchJobPage(inputUrl: string): Promise<ImportPageResult> {
+  let safeInputUrl: URL;
+  try {
+    safeInputUrl = await assertSafeExternalUrl(inputUrl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid URL";
+    throw new JobImportError(message, 400);
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   let response: Response;
 
   try {
-    response = await fetch(inputUrl, {
+    response = await fetch(safeInputUrl.toString(), {
       headers: {
         "accept": "text/html,application/xhtml+xml",
         "user-agent": BROWSER_USER_AGENT,
@@ -731,8 +740,19 @@ async function fetchJobPage(inputUrl: string): Promise<ImportPageResult> {
     throw new JobImportError("The job page was empty.", 422);
   }
 
+  let safeFinalUrl = safeInputUrl;
+  const redirectedUrl = typeof response.url === "string" ? response.url.trim() : "";
+  if (redirectedUrl) {
+    try {
+      safeFinalUrl = await assertSafeExternalUrl(redirectedUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unsafe redirect target";
+      throw new JobImportError(`Unsafe redirect target: ${message}`, 422);
+    }
+  }
+
   return {
-    finalUrl: getUrlString(response.url) || getUrlString(inputUrl),
+    finalUrl: getUrlString(safeFinalUrl.toString()) || getUrlString(safeInputUrl.toString()),
     html,
   };
 }

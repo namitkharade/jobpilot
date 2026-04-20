@@ -277,6 +277,18 @@ describe("job import route", () => {
     expect(invalidBody.success).toBe(false);
     expect(invalidBody.error).toContain("valid http or https job URL");
 
+    const localhostResponse = await route.POST(
+      new Request("http://localhost/api/jobs/import", {
+        method: "POST",
+        body: JSON.stringify({ url: "http://localhost:3000/private" }),
+      }) as never
+    );
+    const localhostBody = (await localhostResponse.json()) as { success: boolean; error: string };
+
+    expect(localhostResponse.status).toBe(400);
+    expect(localhostBody.success).toBe(false);
+    expect(localhostBody.error.toLowerCase()).toContain("not allowed");
+
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       new Response("pdf bytes", {
         status: 200,
