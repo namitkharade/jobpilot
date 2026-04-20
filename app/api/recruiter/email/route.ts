@@ -71,9 +71,11 @@ export async function POST(req: Request) {
         email: candidate?.email || "",
         confidence: candidate?.emailConfidence || 0,
         method: candidate?.email
-          ? candidate.emailVerificationStatus === "valid" || candidate.emailVerificationStatus === "accept_all"
-            ? "hunter-direct"
-            : "hunter-domain"
+          ? candidate.emailResolutionMethod === "hunter-enrichment" || candidate.emailResolutionMethod === "existing"
+            ? "hunter-domain"
+            : candidate.emailResolutionMethod === "pattern-verified"
+              ? "pattern-verified"
+              : "hunter-direct"
           : "not-found",
         verified: candidate?.emailVerificationStatus === "valid",
       },

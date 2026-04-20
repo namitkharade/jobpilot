@@ -3,7 +3,9 @@ import { appendJobs, getAllJobs } from "@/lib/job-store";
 import { JobListing, JobSource, LinkedInTimeRange } from "@/types";
 import { NextResponse } from "next/server";
 
-const ALLOWED_SOURCES: JobSource[] = ["linkedin", "indeed"];
+type ScrapeJobSource = Extract<JobSource, "linkedin" | "indeed">;
+
+const ALLOWED_SOURCES: ScrapeJobSource[] = ["linkedin", "indeed"];
 const TIME_RANGE_OPTIONS: LinkedInTimeRange[] = [
   "any",
   "past_1h",
@@ -24,14 +26,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Invalid location parameter" }, { status: 400 });
     }
 
-    let selectedSources: JobSource[] = ALLOWED_SOURCES;
+    let selectedSources: ScrapeJobSource[] = ALLOWED_SOURCES;
     if (typeof source === "string" && source !== "all") {
-      if (!ALLOWED_SOURCES.includes(source as JobSource)) {
+      if (!ALLOWED_SOURCES.includes(source as ScrapeJobSource)) {
         return NextResponse.json({ success: false, error: "Invalid source parameter" }, { status: 400 });
       }
-      selectedSources = [source as JobSource];
+      selectedSources = [source as ScrapeJobSource];
     } else if (Array.isArray(sources)) {
-      const sanitized = sources.filter((s): s is JobSource => ALLOWED_SOURCES.includes(s));
+      const sanitized = sources.filter((s): s is ScrapeJobSource => ALLOWED_SOURCES.includes(s));
       if (!sanitized.length) {
         return NextResponse.json({ success: false, error: "Invalid sources parameter" }, { status: 400 });
       }

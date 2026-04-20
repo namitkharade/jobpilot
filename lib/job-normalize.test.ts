@@ -28,4 +28,17 @@ describe("job normalization", () => {
     expect(extractLinkedInHandle("https://www.linkedin.com/in/ava-recruiter/")).toBe("ava-recruiter");
     expect(extractLinkedInHandle("https://www.linkedin.com/company/openai/")).toBe("");
   });
+
+  it("preserves manual sources during normalization", () => {
+    const job = normalizeJobListing({
+      id: "job_manual_source",
+      title: "Developer Advocate",
+      company: "Northstar",
+      postedAt: "2026-04-03T00:00:00.000Z",
+      scrapedAt: "2026-04-03T00:00:00.000Z",
+      source: "manual",
+    });
+
+    expect(job.source).toBe("manual");
+  });
 });

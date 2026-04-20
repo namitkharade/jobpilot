@@ -18,6 +18,7 @@ type SortBy = "date" | "ats" | "company" | "salary";
 
 const SOURCE_OPTIONS: Array<JobSource | "all"> = [
   "all",
+  "manual",
   "linkedin",
   "indeed",
 ];

@@ -114,10 +114,13 @@ export default function RecruiterPanel({
       }
 
       await onRefresh?.();
-      toast(
-        candidateId ? "Contact refreshed" : `Found ${response.data.candidates.length} contact candidates`,
-        "success"
-      );
+      const primaryMessage = candidateId
+        ? "Contact refreshed"
+        : `Found ${response.data.candidates.length} contact candidates`;
+      toast(primaryMessage, "success");
+      if (response.data.warnings.length > 0) {
+        toast(response.data.warnings[0], response.data.candidates.length > 0 ? "info" : "error");
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to research recruiter contacts";
       setError(message);

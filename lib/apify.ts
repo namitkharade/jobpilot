@@ -4,8 +4,10 @@ import crypto from "crypto";
 import { getConfig } from "./local-store";
 import { normalizeJobListing } from "./job-normalize";
 
+type ScrapeJobSource = Extract<JobSource, "linkedin" | "indeed">;
+
 export interface ScrapeIssue {
-  source: JobSource;
+  source: ScrapeJobSource;
   actorId: string;
   error: string;
 }
@@ -19,7 +21,7 @@ type ApifyPayload = Record<string, unknown>;
 type ApifyItem = Record<string, unknown>;
 
 const SOURCE_ACTOR_MAP: Record<
-  JobSource,
+  ScrapeJobSource,
   { actorId: string; payload: (query: string, location: string, timeRange?: LinkedInTimeRange) => ApifyPayload }
 > = {
   linkedin: {
@@ -150,7 +152,7 @@ function formatIndeedLocation(item: ApifyItem): string {
   return country;
 }
 
-function normalizeJob(item: ApifyItem, source: JobSource): JobListing | null {
+function normalizeJob(item: ApifyItem, source: ScrapeJobSource): JobListing | null {
   let title = "";
   let company = "";
   let location = "";
@@ -246,7 +248,7 @@ function normalizeJob(item: ApifyItem, source: JobSource): JobListing | null {
 async function runActorAndFetchResults(
   actorId: string,
   payload: ApifyPayload,
-  source: JobSource
+  source: ScrapeJobSource
 ): Promise<{ jobs: JobListing[]; issue?: ScrapeIssue }> {
   const apiToken = getApifyToken();
   if (!apiToken) {
@@ -324,10 +326,10 @@ async function runActorAndFetchResults(
 export async function scrapeJobsDetailed(
   query: string,
   location: string,
-  selectedSources?: JobSource[],
+  selectedSources?: ScrapeJobSource[],
   timeRange?: LinkedInTimeRange
 ): Promise<ScrapeJobsResult> {
-  const sources: JobSource[] = selectedSources?.length
+  const sources: ScrapeJobSource[] = selectedSources?.length
     ? selectedSources
     : ["linkedin", "indeed"];
 
@@ -361,7 +363,7 @@ export async function scrapeJobsDetailed(
 export async function scrapeJobs(
   query: string,
   location: string,
-  selectedSources?: JobSource[],
+  selectedSources?: ScrapeJobSource[],
   timeRange?: LinkedInTimeRange
 ): Promise<JobListing[]> {
   const result = await scrapeJobsDetailed(query, location, selectedSources, timeRange);

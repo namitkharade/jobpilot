@@ -10,7 +10,10 @@ import {
   OutreachState,
   OutreachStatus,
   RecruiterCandidate,
+  RecruiterCandidatePersona,
   RecruiterCandidateRole,
+  RecruiterDiscoveryStage,
+  RecruiterEmailResolutionMethod,
   ResearchEvidence,
   ResearchSourceType,
 } from "@/types";
@@ -32,6 +35,29 @@ const VALID_ROLES: RecruiterCandidateRole[] = [
   "job-poster",
   "legacy",
   "unknown",
+];
+const VALID_PERSONAS: RecruiterCandidatePersona[] = [
+  "recruiter",
+  "hiring-manager",
+  "department-head",
+  "job-poster",
+  "legacy",
+  "unknown",
+];
+const VALID_DISCOVERY_STAGES: RecruiterDiscoveryStage[] = [
+  "legacy",
+  "manual",
+  "first-party",
+  "web-search",
+  "hunter-search",
+];
+const VALID_EMAIL_RESOLUTION_METHODS: RecruiterEmailResolutionMethod[] = [
+  "existing",
+  "hunter-direct",
+  "hunter-enrichment",
+  "pattern-verified",
+  "manual",
+  "not-found",
 ];
 const VALID_CHANNELS: CandidateChannel[] = ["email", "linkedin"];
 const VALID_EMAIL_STATUSES: EmailVerificationStatus[] = [
@@ -159,6 +185,12 @@ export function inferCandidateRoleFromTitle(title: string): RecruiterCandidateRo
   return "unknown";
 }
 
+export function deriveCandidatePersona(role: RecruiterCandidateRole): RecruiterCandidatePersona {
+  return VALID_PERSONAS.includes(role as RecruiterCandidatePersona)
+    ? (role as RecruiterCandidatePersona)
+    : "unknown";
+}
+
 function deriveChannelOptions(email: string, linkedinUrl: string): CandidateChannel[] {
   const options: CandidateChannel[] = [];
   if (email.trim()) options.push("email");
@@ -214,10 +246,25 @@ export function normalizeRecruiterCandidate(input: unknown): RecruiterCandidate 
     ? (record.channelOptions as unknown[]).filter((entry): entry is CandidateChannel => VALID_CHANNELS.includes(entry as CandidateChannel))
     : [];
   const role = asValidString(record.role, VALID_ROLES, inferCandidateRoleFromTitle(asString(record.title)));
+  const persona = asValidString(record.persona, VALID_PERSONAS, deriveCandidatePersona(role));
   const emailVerificationStatus = asValidString(
     record.emailVerificationStatus || record.emailStatus,
     VALID_EMAIL_STATUSES,
     email ? "unverified" : "not_found"
+  );
+  const emailResolutionMethod = asValidString(
+    record.emailResolutionMethod,
+    VALID_EMAIL_RESOLUTION_METHODS,
+    email ? "manual" : "not-found"
+  );
+  const discoveryStage = asValidString(
+    record.discoveryStage,
+    VALID_DISCOVERY_STAGES,
+    Array.isArray(record.sourceTypes) && (record.sourceTypes as unknown[]).includes("legacy")
+      ? "legacy"
+      : Array.isArray(record.sourceTypes) && (record.sourceTypes as unknown[]).includes("manual")
+        ? "manual"
+        : "first-party"
   );
 
   return {
@@ -230,11 +277,13 @@ export function normalizeRecruiterCandidate(input: unknown): RecruiterCandidate 
     name: asString(record.name),
     title: asString(record.title),
     role,
+    persona,
     linkedinUrl,
     linkedinHandle: asString(record.linkedinHandle) || extractLinkedInHandle(linkedinUrl),
     email,
     emailVerificationStatus,
     emailConfidence: asNumber(record.emailConfidence ?? record.confidence),
+    emailResolutionMethod,
     domainPattern: asString(record.domainPattern),
     channelOptions: channelOptionsRaw.length ? channelOptionsRaw : deriveChannelOptions(email, linkedinUrl),
     score: asNumber(record.score ?? record.confidence),
@@ -243,6 +292,7 @@ export function normalizeRecruiterCandidate(input: unknown): RecruiterCandidate 
       ? (record.sourceTypes as unknown[]).filter((entry): entry is ResearchSourceType => VALID_SOURCE_TYPES.includes(entry as ResearchSourceType))
       : [],
     sourceSummary: asString(record.sourceSummary || record.source),
+    discoveryStage,
     evidence: asRecordArray(record.evidence).map(normalizeResearchEvidence),
   };
 }
@@ -368,16 +418,19 @@ function buildLegacyCandidate(input: Partial<JobListing>): RecruiterCandidate | 
     name,
     title,
     role: title ? inferCandidateRoleFromTitle(title) : "legacy",
+    persona: title ? deriveCandidatePersona(inferCandidateRoleFromTitle(title)) : "legacy",
     linkedinUrl,
     email,
     emailVerificationStatus: email ? "unverified" : "not_found",
     emailConfidence: email ? 60 : 0,
+    emailResolutionMethod: email ? "manual" : "not-found",
     domainPattern: "",
     channelOptions: deriveChannelOptions(email, linkedinUrl),
     score: email ? 70 : linkedinUrl ? 55 : 40,
     reasons: ["Migrated from legacy recruiter fields"],
     sourceTypes: ["legacy"],
     sourceSummary: "Migrated from legacy recruiter fields",
+    discoveryStage: "legacy",
     evidence: [],
   });
 }
@@ -425,7 +478,7 @@ export function normalizeJobListing(input: Partial<JobListing> | Record<string, 
     recruiterProfileUrl: normalizeUrl(asString(raw.recruiterProfileUrl)),
     recruiterEmail: asString(raw.recruiterEmail),
     emailDraft: asString(raw.emailDraft),
-    source: raw.source === "indeed" ? "indeed" : "linkedin",
+    source: raw.source === "indeed" ? "indeed" : raw.source === "manual" ? "manual" : "linkedin",
     jobPosterName: asString(raw.jobPosterName),
     jobPosterTitle: asString(raw.jobPosterTitle),
   };

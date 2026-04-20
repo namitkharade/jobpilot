@@ -164,7 +164,7 @@ function fromRow(row: JobRow): JobListing {
     location: row.location,
     salary: row.salary,
     jobType: row.job_type,
-    source: row.source === "indeed" ? "indeed" : "linkedin",
+    source: row.source === "indeed" ? "indeed" : row.source === "manual" ? "manual" : "linkedin",
     postedAt: row.posted_at,
     scrapedAt: row.scraped_at,
     applyUrl: row.apply_url,

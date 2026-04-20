@@ -4,8 +4,10 @@ import {
   RecruiterCandidateRole,
   RecruiterProfile,
   ResearchEvidence,
+  HunterProviderStatus,
 } from "@/types";
 import {
+  deriveCandidatePersona,
   extractLinkedInHandle,
   inferCandidateRoleFromTitle,
   normalizeRecruiterCandidate,
@@ -52,11 +54,22 @@ interface HunterCompanySnapshot {
 interface HunterSearchResult {
   candidates: RecruiterCandidate[];
   company: HunterCompanySnapshot | null;
+  providerStatus: HunterProviderStatus;
+  warning: string;
 }
 
 export interface CandidateEmailResolution {
   candidate: RecruiterCandidate;
   method: "existing" | "hunter-direct" | "hunter-enrichment" | "pattern-verified" | "not-found";
+  providerStatus: HunterProviderStatus;
+  warning: string;
+  attemptedMethods: string[];
+}
+
+export interface HunterOperationResult<T> {
+  data: T;
+  providerStatus: HunterProviderStatus;
+  warning: string;
 }
 
 const DEPT_MAP: Record<string, HunterDepartment> = {
@@ -103,6 +116,16 @@ const DEPT_MAP: Record<string, HunterDepartment> = {
 
 const BASE_URL = "https://api.hunter.io/v2";
 const DEFAULT_LIMIT = 10;
+
+export class HunterApiError extends Error {
+  statusCode: number;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.name = "HunterApiError";
+    this.statusCode = statusCode;
+  }
+}
 
 const RECRUITER_TITLES = [
   "recruiter",
@@ -179,10 +202,49 @@ async function hunterRequest(
   });
 
   if (!response.ok) {
-    throw new Error(`Hunter request failed (${response.status})`);
+    let message = `Hunter request failed (${response.status})`;
+    try {
+      const payload = (await response.json()) as { errors?: Array<{ details?: string; message?: string }> };
+      const details = Array.isArray(payload?.errors)
+        ? payload.errors
+            .map((entry) => entry?.details || entry?.message || "")
+            .filter(Boolean)
+            .join("; ")
+        : "";
+      if (details) {
+        message = details;
+      }
+    } catch {
+      // Ignore parse issues and keep the generic error.
+    }
+    throw new HunterApiError(message, response.status);
   }
 
   return response.json();
+}
+
+function mapHunterProviderStatus(error: unknown): HunterProviderStatus {
+  if (!hasHunterKey()) return "unavailable";
+  if (error instanceof HunterApiError && (error.statusCode === 401 || error.statusCode === 403)) {
+    return "auth_failed";
+  }
+  return "unavailable";
+}
+
+function getHunterWarning(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (!hasHunterKey()) {
+    return "Hunter API key missing";
+  }
+  return "Hunter unavailable";
+}
+
+function mergeHunterProviderStatus(...statuses: HunterProviderStatus[]): HunterProviderStatus {
+  if (statuses.includes("auth_failed")) return "auth_failed";
+  if (statuses.includes("ok")) return "ok";
+  return "unavailable";
 }
 
 function normalizeVerificationStatus(status: string): EmailVerificationStatus {
@@ -317,6 +379,7 @@ function buildCandidateFromHunterEntry(
     name: fullName,
     title,
     role: roleHint === "unknown" ? inferCandidateRoleFromTitle(title) : roleHint,
+    persona: deriveCandidatePersona(roleHint === "unknown" ? inferCandidateRoleFromTitle(title) : roleHint),
     linkedinUrl,
     linkedinHandle: extractLinkedInHandle(linkedinUrl),
     email: typeof entry.value === "string" ? entry.value : "",
@@ -327,10 +390,12 @@ function buildCandidateFromHunterEntry(
         : typeof entry.score === "number"
           ? entry.score
           : 0,
+    emailResolutionMethod: typeof entry.value === "string" && entry.value ? "existing" : "not-found",
     domainPattern: pattern,
     reasons: pattern ? [`Hunter pattern ${pattern}`] : [],
     sourceTypes: ["hunter"],
     sourceSummary: `Hunter ${roleHint === "unknown" ? "contact" : roleHint} track`,
+    discoveryStage: "hunter-search",
     evidence:
       evidence.length > 0
         ? evidence
@@ -391,15 +456,29 @@ function applyEmailPattern(pattern: string, firstName: string, lastName: string,
   return output;
 }
 
-export async function extractDomain(company: string): Promise<string> {
-  if (!hasHunterKey() || !company.trim()) return "";
+export async function extractDomain(company: string): Promise<HunterOperationResult<string>> {
+  if (!hasHunterKey() || !company.trim()) {
+    return {
+      data: "",
+      providerStatus: "unavailable",
+      warning: !hasHunterKey() ? "Hunter API key missing" : "Missing company for Hunter domain lookup",
+    };
+  }
 
   try {
     const payload = await hunterRequest("/domain-search", { company });
     const data = payload.data && typeof payload.data === "object" ? (payload.data as Record<string, unknown>) : null;
-    return data && typeof data.domain === "string" ? normalizeDomain(data.domain) : "";
-  } catch {
-    return "";
+    return {
+      data: data && typeof data.domain === "string" ? normalizeDomain(data.domain) : "",
+      providerStatus: "ok",
+      warning: "",
+    };
+  } catch (error) {
+    return {
+      data: "",
+      providerStatus: mapHunterProviderStatus(error),
+      warning: getHunterWarning(error),
+    };
   }
 }
 
@@ -409,8 +488,14 @@ export async function getHunterCompanySnapshot({
 }: {
   company?: string;
   domain?: string;
-}): Promise<HunterCompanySnapshot | null> {
-  if (!hasHunterKey()) return null;
+}): Promise<HunterOperationResult<HunterCompanySnapshot | null>> {
+  if (!hasHunterKey()) {
+    return {
+      data: null,
+      providerStatus: "unavailable",
+      warning: "Hunter API key missing",
+    };
+  }
 
   try {
     const payload = await hunterRequest("/domain-search", {
@@ -418,21 +503,36 @@ export async function getHunterCompanySnapshot({
       domain,
       limit: 1,
     });
-    return extractCompanySnapshot(payload as Record<string, unknown>);
-  } catch {
-    return null;
+    return {
+      data: extractCompanySnapshot(payload as Record<string, unknown>),
+      providerStatus: "ok",
+      warning: "",
+    };
+  } catch (error) {
+    return {
+      data: null,
+      providerStatus: mapHunterProviderStatus(error),
+      warning: getHunterWarning(error),
+    };
   }
 }
 
 export async function searchHunterContacts(options: HunterSearchOptions): Promise<HunterSearchResult> {
   if (!hasHunterKey() || !options.domain.trim()) {
-    return { candidates: [], company: null };
+    return {
+      candidates: [],
+      company: null,
+      providerStatus: "unavailable",
+      warning: !hasHunterKey() ? "Hunter API key missing" : "Missing domain for Hunter contact search",
+    };
   }
 
   const allCandidates: RecruiterCandidate[] = [];
   let offset = options.offset || 0;
   let company: HunterCompanySnapshot | null = null;
   const limit = Math.min(options.limit || DEFAULT_LIMIT, DEFAULT_LIMIT);
+  let providerStatus: HunterProviderStatus = "ok";
+  let warning = "";
 
   while (allCandidates.length < 25) {
     try {
@@ -483,7 +583,9 @@ export async function searchHunterContacts(options: HunterSearchOptions): Promis
       }
 
       offset += emails.length;
-    } catch {
+    } catch (error) {
+      providerStatus = mapHunterProviderStatus(error);
+      warning = getHunterWarning(error);
       break;
     }
   }
@@ -491,6 +593,8 @@ export async function searchHunterContacts(options: HunterSearchOptions): Promis
   return {
     candidates: dedupeHunterCandidates(allCandidates).slice(0, 25),
     company,
+    providerStatus,
+    warning,
   };
 }
 
@@ -533,9 +637,13 @@ export async function findEmail(
   firstName: string,
   lastName: string,
   domain: string
-): Promise<{ email: string; confidence: number; verified: boolean; status: EmailVerificationStatus }> {
+): Promise<HunterOperationResult<{ email: string; confidence: number; verified: boolean; status: EmailVerificationStatus }>> {
   if (!hasHunterKey() || !firstName.trim() || !domain.trim()) {
-    return { email: "", confidence: 0, verified: false, status: "not_found" };
+    return {
+      data: { email: "", confidence: 0, verified: false, status: "not_found" },
+      providerStatus: "unavailable",
+      warning: !hasHunterKey() ? "Hunter API key missing" : "Missing candidate name or domain for Hunter email lookup",
+    };
   }
 
   try {
@@ -557,22 +665,34 @@ export async function findEmail(
     );
 
     return {
-      email: typeof data.email === "string" ? data.email : "",
-      confidence: typeof data.score === "number" ? data.score : 0,
-      verified: status === "valid",
-      status,
+      data: {
+        email: typeof data.email === "string" ? data.email : "",
+        confidence: typeof data.score === "number" ? data.score : 0,
+        verified: status === "valid",
+        status,
+      },
+      providerStatus: "ok",
+      warning: "",
     };
-  } catch {
-    return { email: "", confidence: 0, verified: false, status: "not_found" };
+  } catch (error) {
+    return {
+      data: { email: "", confidence: 0, verified: false, status: "not_found" },
+      providerStatus: mapHunterProviderStatus(error),
+      warning: getHunterWarning(error),
+    };
   }
 }
 
 export async function findEmailByLinkedInHandle(
   linkedinHandle: string,
   domain: string
-): Promise<{ email: string; confidence: number; status: EmailVerificationStatus }> {
+): Promise<HunterOperationResult<{ email: string; confidence: number; status: EmailVerificationStatus }>> {
   if (!hasHunterKey() || !linkedinHandle.trim()) {
-    return { email: "", confidence: 0, status: "not_found" };
+    return {
+      data: { email: "", confidence: 0, status: "not_found" },
+      providerStatus: "unavailable",
+      warning: !hasHunterKey() ? "Hunter API key missing" : "Missing LinkedIn handle for Hunter lookup",
+    };
   }
 
   try {
@@ -585,26 +705,38 @@ export async function findEmailByLinkedInHandle(
       ? (data.verification as Record<string, unknown>)
       : {};
     return {
-      email: typeof data.email === "string" ? data.email : "",
-      confidence: typeof data.score === "number" ? data.score : 0,
-      status: normalizeVerificationStatus(
-        typeof verification.status === "string"
-          ? verification.status
-          : typeof data.status === "string"
-            ? data.status
-            : ""
-      ),
+      data: {
+        email: typeof data.email === "string" ? data.email : "",
+        confidence: typeof data.score === "number" ? data.score : 0,
+        status: normalizeVerificationStatus(
+          typeof verification.status === "string"
+            ? verification.status
+            : typeof data.status === "string"
+              ? data.status
+              : ""
+        ),
+      },
+      providerStatus: "ok",
+      warning: "",
     };
-  } catch {
-    return { email: "", confidence: 0, status: "not_found" };
+  } catch (error) {
+    return {
+      data: { email: "", confidence: 0, status: "not_found" },
+      providerStatus: mapHunterProviderStatus(error),
+      warning: getHunterWarning(error),
+    };
   }
 }
 
 export async function enrichEmailByLinkedInHandle(
   linkedinHandle: string
-): Promise<{ email: string; confidence: number; status: EmailVerificationStatus }> {
+): Promise<HunterOperationResult<{ email: string; confidence: number; status: EmailVerificationStatus }>> {
   if (!hasHunterKey() || !linkedinHandle.trim()) {
-    return { email: "", confidence: 0, status: "not_found" };
+    return {
+      data: { email: "", confidence: 0, status: "not_found" },
+      providerStatus: "unavailable",
+      warning: !hasHunterKey() ? "Hunter API key missing" : "Missing LinkedIn handle for Hunter enrichment",
+    };
   }
 
   try {
@@ -613,23 +745,35 @@ export async function enrichEmailByLinkedInHandle(
     });
     const data = payload.data && typeof payload.data === "object" ? (payload.data as Record<string, unknown>) : {};
     return {
-      email:
-        typeof data.email === "string"
-          ? data.email
-          : Array.isArray(data.emails) && data.emails.length > 0 && typeof data.emails[0] === "string"
-            ? (data.emails[0] as string)
-            : "",
-      confidence: typeof data.score === "number" ? data.score : 0,
-      status: normalizeVerificationStatus(typeof data.status === "string" ? data.status : ""),
+      data: {
+        email:
+          typeof data.email === "string"
+            ? data.email
+            : Array.isArray(data.emails) && data.emails.length > 0 && typeof data.emails[0] === "string"
+              ? (data.emails[0] as string)
+              : "",
+        confidence: typeof data.score === "number" ? data.score : 0,
+        status: normalizeVerificationStatus(typeof data.status === "string" ? data.status : ""),
+      },
+      providerStatus: "ok",
+      warning: "",
     };
-  } catch {
-    return { email: "", confidence: 0, status: "not_found" };
+  } catch (error) {
+    return {
+      data: { email: "", confidence: 0, status: "not_found" },
+      providerStatus: mapHunterProviderStatus(error),
+      warning: getHunterWarning(error),
+    };
   }
 }
 
-export async function verifyEmail(email: string): Promise<{ valid: boolean; result: string }> {
+export async function verifyEmail(email: string): Promise<HunterOperationResult<{ valid: boolean; result: string }>> {
   if (!hasHunterKey() || !email.trim()) {
-    return { valid: false, result: "not_found" };
+    return {
+      data: { valid: false, result: "not_found" },
+      providerStatus: "unavailable",
+      warning: !hasHunterKey() ? "Hunter API key missing" : "Missing email for verification",
+    };
   }
 
   try {
@@ -637,11 +781,19 @@ export async function verifyEmail(email: string): Promise<{ valid: boolean; resu
     const data = payload.data && typeof payload.data === "object" ? (payload.data as Record<string, unknown>) : {};
     const result = typeof data.status === "string" ? data.status : "unknown";
     return {
-      valid: result === "valid",
-      result,
+      data: {
+        valid: result === "valid",
+        result,
+      },
+      providerStatus: "ok",
+      warning: "",
     };
-  } catch {
-    return { valid: false, result: "error" };
+  } catch (error) {
+    return {
+      data: { valid: false, result: "error" },
+      providerStatus: mapHunterProviderStatus(error),
+      warning: getHunterWarning(error),
+    };
   }
 }
 
@@ -650,13 +802,15 @@ function updateCandidateEmail(
   email: string,
   confidence: number,
   status: EmailVerificationStatus,
-  reason: string
+  reason: string,
+  method: CandidateEmailResolution["method"]
 ): RecruiterCandidate {
   return normalizeRecruiterCandidate({
     ...candidate,
     email,
     emailConfidence: Math.max(candidate.emailConfidence, confidence),
     emailVerificationStatus: email ? status : candidate.emailVerificationStatus,
+    emailResolutionMethod: email ? method : candidate.emailResolutionMethod,
     reasons: Array.from(new Set([...candidate.reasons, reason])),
   });
 }
@@ -666,43 +820,100 @@ export async function resolveCandidateEmail(
   domain: string
 ): Promise<CandidateEmailResolution> {
   if (!domain.trim()) {
-    return { candidate, method: "not-found" };
+    return {
+      candidate,
+      method: "not-found",
+      providerStatus: "unavailable",
+      warning: "Missing company domain for email resolution",
+      attemptedMethods: [],
+    };
   }
 
   if (
     candidate.email.trim() &&
     (candidate.emailVerificationStatus === "valid" || candidate.emailVerificationStatus === "accept_all")
   ) {
-    return { candidate, method: "existing" };
+    return {
+      candidate: normalizeRecruiterCandidate({
+        ...candidate,
+        emailResolutionMethod: "existing",
+      }),
+      method: "existing",
+      providerStatus: "ok",
+      warning: "",
+      attemptedMethods: ["existing-email"],
+    };
   }
 
   const linkedinHandle = candidate.linkedinHandle || extractLinkedInHandle(candidate.linkedinUrl);
+  const attemptedMethods: string[] = [];
+  const warnings = new Set<string>();
+  let providerStatus: HunterProviderStatus = hasHunterKey() ? "ok" : "unavailable";
 
   if (linkedinHandle) {
+    attemptedMethods.push("linkedin-handle");
     const direct = await findEmailByLinkedInHandle(linkedinHandle, domain);
-    if (direct.email) {
+    providerStatus = mergeHunterProviderStatus(providerStatus, direct.providerStatus);
+    if (direct.warning) warnings.add(direct.warning);
+    if (direct.data.email) {
       return {
-        candidate: updateCandidateEmail(candidate, direct.email, direct.confidence, direct.status, "Resolved via Hunter LinkedIn handle lookup"),
+        candidate: updateCandidateEmail(
+          candidate,
+          direct.data.email,
+          direct.data.confidence,
+          direct.data.status,
+          "Resolved via Hunter LinkedIn handle lookup",
+          "hunter-direct"
+        ),
         method: "hunter-direct",
+        providerStatus,
+        warning: Array.from(warnings).join(" | "),
+        attemptedMethods,
       };
     }
 
+    attemptedMethods.push("linkedin-enrichment");
     const enriched = await enrichEmailByLinkedInHandle(linkedinHandle);
-    if (enriched.email) {
+    providerStatus = mergeHunterProviderStatus(providerStatus, enriched.providerStatus);
+    if (enriched.warning) warnings.add(enriched.warning);
+    if (enriched.data.email) {
       return {
-        candidate: updateCandidateEmail(candidate, enriched.email, enriched.confidence, enriched.status, "Resolved via Hunter LinkedIn enrichment"),
+        candidate: updateCandidateEmail(
+          candidate,
+          enriched.data.email,
+          enriched.data.confidence,
+          enriched.data.status,
+          "Resolved via Hunter LinkedIn enrichment",
+          "hunter-enrichment"
+        ),
         method: "hunter-enrichment",
+        providerStatus,
+        warning: Array.from(warnings).join(" | "),
+        attemptedMethods,
       };
     }
   }
 
   const { firstName, lastName } = splitName(candidate.name);
   if (firstName) {
+    attemptedMethods.push("name-domain");
     const direct = await findEmail(firstName, lastName, domain);
-    if (direct.email) {
+    providerStatus = mergeHunterProviderStatus(providerStatus, direct.providerStatus);
+    if (direct.warning) warnings.add(direct.warning);
+    if (direct.data.email) {
       return {
-        candidate: updateCandidateEmail(candidate, direct.email, direct.confidence, direct.status, "Resolved via Hunter name lookup"),
+        candidate: updateCandidateEmail(
+          candidate,
+          direct.data.email,
+          direct.data.confidence,
+          direct.data.status,
+          "Resolved via Hunter name lookup",
+          "hunter-direct"
+        ),
         method: "hunter-direct",
+        providerStatus,
+        warning: Array.from(warnings).join(" | "),
+        attemptedMethods,
       };
     }
   }
@@ -717,17 +928,39 @@ export async function resolveCandidateEmail(
     ).slice(0, 2);
 
     for (const email of attempts) {
+      attemptedMethods.push(`pattern:${email}`);
       const verification = await verifyEmail(email);
-      if (verification.valid) {
+      providerStatus = mergeHunterProviderStatus(providerStatus, verification.providerStatus);
+      if (verification.warning) warnings.add(verification.warning);
+      if (verification.data.valid) {
         return {
-          candidate: updateCandidateEmail(candidate, email, 99, "valid", `Verified against Hunter pattern ${candidate.domainPattern || "first.last"}`),
+          candidate: updateCandidateEmail(
+            candidate,
+            email,
+            99,
+            "valid",
+            `Verified against Hunter pattern ${candidate.domainPattern || "first.last"}`,
+            "pattern-verified"
+          ),
           method: "pattern-verified",
+          providerStatus,
+          warning: Array.from(warnings).join(" | "),
+          attemptedMethods,
         };
       }
     }
   }
 
-  return { candidate, method: "not-found" };
+  return {
+    candidate: normalizeRecruiterCandidate({
+      ...candidate,
+      emailResolutionMethod: candidate.email ? candidate.emailResolutionMethod : "not-found",
+    }),
+    method: "not-found",
+    providerStatus,
+    warning: Array.from(warnings).join(" | "),
+    attemptedMethods,
+  };
 }
 
 export async function findRecruitersAndManagers(
@@ -766,7 +999,12 @@ export async function findRecruitersAndManagers(
         jobTitles: MANAGER_TITLES,
         roleHint: "hiring-manager",
       })
-    : { candidates: [] as RecruiterCandidate[], company: recruiterTrack.company };
+    : {
+        candidates: [] as RecruiterCandidate[],
+        company: recruiterTrack.company,
+        providerStatus: recruiterTrack.providerStatus,
+        warning: recruiterTrack.warning,
+      };
 
   return [...recruiterTrack.candidates, ...managerTrack.candidates].map((candidate) => ({
     name: candidate.name,
@@ -788,8 +1026,8 @@ export async function lookupRecruiterEmail(
   method: "hunter-direct" | "hunter-domain" | "pattern-verified" | "not-found";
   verified: boolean;
 }> {
-  const domain = await extractDomain(company);
-  if (!domain) {
+  const domainResult = await extractDomain(company);
+  if (!domainResult.data) {
     return { email: "", confidence: 0, method: "not-found", verified: false };
   }
 
@@ -806,6 +1044,7 @@ export async function lookupRecruiterEmail(
     evidence: [],
   });
 
+  const domain = domainResult.data;
   const result = await resolveCandidateEmail(candidate, domain);
   return {
     email: result.candidate.email,

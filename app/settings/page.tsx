@@ -44,9 +44,10 @@ export default function SettingsPage() {
 
   // SearXNG State
   const [searxng, setSearxng] = useState<{
-    instances: { url: string; alive: boolean }[];
+    instances: { url: string; alive: boolean; status?: string; message?: string }[];
+    providers: { id: string; label: string; kind: string; status: string; configured: boolean; url: string; message: string }[];
     loading: boolean;
-  }>({ instances: [], loading: false });
+  }>({ instances: [], providers: [], loading: false });
 
   const checkSearxng = useCallback(async () => {
     setSearxng(prev => ({ ...prev, loading: true }));
@@ -54,7 +55,7 @@ export default function SettingsPage() {
       const res = await fetch("/api/config/searxng");
       const data = await res.json();
       if (data.success) {
-        setSearxng({ instances: data.data.instances, loading: false });
+        setSearxng({ instances: data.data.instances, providers: data.data.providers || [], loading: false });
       }
     } catch {
       toast("Failed to check SearXNG instances", "error");
@@ -288,7 +289,7 @@ export default function SettingsPage() {
           {renderKeyField("openai", "OpenAI", "Enter OpenAI API key")}
           {renderKeyField("apify", "Apify", "Enter Apify API token")}
           {renderKeyField("hunter", "Hunter.io", "Enter Hunter API key")}
-          {renderKeyField("searxng", "SearXNG URL (optional override)", "https://your-instance.hf.space (leave empty to use default)")}
+          {renderKeyField("searxng", "SearXNG URL (optional override)", "https://your-instance.example (optional)")}
         </div>
       </section>
 
@@ -306,7 +307,7 @@ export default function SettingsPage() {
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold">Search</h2>
-            <p className="text-xs text-zinc-500">Public SearXNG instances used for recruiter research.</p>
+            <p className="text-xs text-zinc-500">OpenAI web search is the default recruiter-discovery backend. SearXNG is an optional override.</p>
           </div>
           <button
             onClick={checkSearxng}
@@ -319,31 +320,53 @@ export default function SettingsPage() {
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
             ) : null}
-            Test Instances
+            Test Providers
           </button>
         </div>
 
         <div className="space-y-2">
-          {searxng.instances.map((instance, idx) => (
-            <div key={idx} className="flex items-center justify-between rounded-md border border-zinc-100 p-2.5 dark:border-zinc-800/50 dark:bg-zinc-900/30">
-              <span className="text-xs font-mono text-zinc-600 dark:text-zinc-400">
-                {instance.url.length > 40 ? `${instance.url.substring(0, 37)}...` : instance.url}
+          {searxng.providers.map((provider) => (
+            <div key={provider.id} className="flex items-center justify-between rounded-md border border-zinc-100 p-2.5 dark:border-zinc-800/50 dark:bg-zinc-900/30">
+              <div>
+                <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{provider.label}</div>
+                <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                  {provider.message || (provider.configured ? "Configured" : "Not configured")}
+                </div>
+              </div>
+              <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium ${
+                provider.status === "ok"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400"
+                  : provider.status === "invalid_response"
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-400"
+                    : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+              }`}>
+                {provider.status}
               </span>
-              {instance.alive ? (
-                <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400">
-                  <span className="h-1 w-1 rounded-full bg-emerald-500"></span>
-                  Live
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 rounded bg-rose-100 px-2 py-0.5 text-[10px] font-medium text-rose-800 dark:bg-rose-950/40 dark:text-rose-400">
-                  <span className="h-1 w-1 rounded-full bg-rose-500"></span>
-                  Down
-                </span>
-              )}
             </div>
           ))}
-          {searxng.instances.length === 0 && !searxng.loading && (
-            <p className="py-2 text-center text-xs text-zinc-400">No instances configured.</p>
+          {searxng.instances.map((instance, idx) => (
+            <div key={idx} className="flex items-center justify-between rounded-md border border-zinc-100 p-2.5 dark:border-zinc-800/50 dark:bg-zinc-900/30">
+              <div>
+                <span className="text-xs font-mono text-zinc-600 dark:text-zinc-400">
+                  {instance.url.length > 40 ? `${instance.url.substring(0, 37)}...` : instance.url}
+                </span>
+                {instance.message ? (
+                  <div className="text-[10px] text-zinc-500 dark:text-zinc-400">{instance.message}</div>
+                ) : null}
+              </div>
+              <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium ${
+                instance.alive
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400"
+                  : instance.status === "invalid_response"
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-400"
+                    : "bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-400"
+              }`}>
+                {instance.alive ? "Live" : instance.status === "invalid_response" ? "Invalid JSON" : "Down"}
+              </span>
+            </div>
+          ))}
+          {searxng.instances.length === 0 && searxng.providers.length === 0 && !searxng.loading && (
+            <p className="py-2 text-center text-xs text-zinc-400">No search providers configured.</p>
           )}
         </div>
         <p className="mt-4 text-[10px] text-zinc-400 italic">

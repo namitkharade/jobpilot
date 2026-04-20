@@ -105,4 +105,29 @@ describe("recruiter intelligence helpers", () => {
     expect(scored.score).toBeGreaterThanOrEqual(70);
     expect(scored.reasons).toEqual(expect.arrayContaining(["Verified email available", "First-party poster/apply-page signal"]));
   });
+
+  it("penalizes agency-style titles more heavily than in-house recruiters", () => {
+    const inHouse = normalizeRecruiterCandidate({
+      name: "Ava Recruiter",
+      title: "Technical Recruiter",
+      linkedinUrl: "https://www.linkedin.com/in/ava/",
+      sourceTypes: ["hunter"],
+      sourceSummary: "In-house recruiting",
+      evidence: [],
+    });
+
+    const agency = normalizeRecruiterCandidate({
+      name: "Blake Consultant",
+      title: "Principal Recruitment Consultant",
+      linkedinUrl: "https://www.linkedin.com/in/blake/",
+      sourceTypes: ["hunter"],
+      sourceSummary: "Agency recruiting",
+      evidence: [],
+    });
+
+    const inHouseScore = recruiterIntelligenceTestUtils.scoreCandidate(inHouse, targetProfile).score;
+    const agencyScore = recruiterIntelligenceTestUtils.scoreCandidate(agency, targetProfile).score;
+
+    expect(agencyScore).toBeLessThan(inHouseScore);
+  });
 });

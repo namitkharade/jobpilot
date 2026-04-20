@@ -1,5 +1,6 @@
 "use client";
 
+import AddJobModal from "@/components/AddJobModal";
 import JobTable from "@/components/JobTable";
 import ResumeEditor from "@/components/ResumeEditor";
 import { useToast } from "@/components/ToastProvider";
@@ -93,18 +94,6 @@ const DEMO_JOBS: JobListing[] = [
   }),
 ];
 
-const EMPTY_FORM = {
-  title: "",
-  company: "",
-  location: "",
-  salary: "",
-  jobType: "Full-time",
-  source: "linkedin" as JobSource,
-  applyUrl: "",
-  jobDescription: "",
-  status: "saved" as JobStatus,
-};
-
 const TIME_RANGE_OPTIONS: Array<{ value: LinkedInTimeRange; label: string }> = [
   { value: "any", label: "Any time" },
   { value: "past_1h", label: "Last 1 hour" },
@@ -128,9 +117,6 @@ export default function DashboardPage() {
   const [timeRange, setTimeRange] = useState<LinkedInTimeRange>("any");
   const [scrapeLoading, setScrapeLoading] = useState(false);
   const [progressCount, setProgressCount] = useState(0);
-
-  const [addJobForm, setAddJobForm] = useState(EMPTY_FORM);
-  const [addJobLoading, setAddJobLoading] = useState(false);
 
   const fetcher = useCallback(async (url: string) => {
     try {
@@ -264,60 +250,6 @@ export default function DashboardPage() {
       setScrapeLoading(false);
     }
   }, [location, mutate, role, scrapeSource, timeRange, toast]);
-
-  const submitAddJob = useCallback(async () => {
-    if (!addJobForm.title.trim() || !addJobForm.company.trim()) {
-      toast("Title and Company are required", "info");
-      return;
-    }
-
-    setAddJobLoading(true);
-    try {
-      const now = new Date().toISOString();
-      const job: JobListing = normalizeJobListing({
-        id: `manual_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        title: addJobForm.title.trim(),
-        company: addJobForm.company.trim(),
-        location: addJobForm.location.trim(),
-        salary: addJobForm.salary.trim(),
-        jobType: addJobForm.jobType,
-        source: addJobForm.source,
-        applyUrl: addJobForm.applyUrl.trim(),
-        jobDescription: addJobForm.jobDescription.trim(),
-        companyDescription: "",
-        status: addJobForm.status,
-        postedAt: now,
-        scrapedAt: now,
-        atsScore: null,
-        atsKeywordGaps: [],
-        atsSuggestions: [],
-        recruiterName: "",
-        recruiterTitle: "",
-        recruiterProfileUrl: "",
-        recruiterEmail: "",
-        emailDraft: "",
-        jobPosterName: "",
-        jobPosterTitle: "",
-      });
-
-      const res = await fetch("/api/jobs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(job),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed to add job");
-
-      toast("Job added successfully", "success");
-      setAddJobForm(EMPTY_FORM);
-      setAddJobOpen(false);
-      await mutate();
-    } catch (err: unknown) {
-      toast(err instanceof Error ? err.message : "Failed to add job", "error");
-    } finally {
-      setAddJobLoading(false);
-    }
-  }, [addJobForm, mutate, toast]);
 
   const stats = useMemo(() => {
     const today = new Date().toDateString();
@@ -478,144 +410,11 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {addJobOpen && (
-        <div className="fixed inset-0 z-40 grid place-items-center bg-black/45 p-4">
-          <div className="w-full max-w-lg overflow-y-auto max-h-[90vh] rounded-lg border border-zinc-200 bg-[var(--surface)] p-5 shadow-xl dark:border-zinc-800">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Add Job Manually</h2>
-              <button
-                className="text-sm text-zinc-500 hover:text-zinc-900 disabled:opacity-50 dark:hover:text-zinc-100"
-                disabled={addJobLoading}
-                onClick={() => {
-                  if (addJobLoading) return;
-                  setAddJobForm(EMPTY_FORM);
-                  setAddJobOpen(false);
-                }}
-              >
-                Close
-              </button>
-            </div>
-
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                submitAddJob();
-              }}
-            >
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Job Title</label>
-                <input
-                  value={addJobForm.title}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, title: e.target.value }))}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none ring-zinc-300 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Company</label>
-                <input
-                  value={addJobForm.company}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, company: e.target.value }))}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none ring-zinc-300 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Location</label>
-                <input
-                  value={addJobForm.location}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, location: e.target.value }))}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none ring-zinc-300 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Salary</label>
-                <input
-                  value={addJobForm.salary}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, salary: e.target.value }))}
-                  placeholder="$120k - $160k"
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none ring-zinc-300 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Job Type</label>
-                <select
-                  value={addJobForm.jobType}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, jobType: e.target.value }))}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none dark:border-zinc-700 dark:bg-zinc-900"
-                >
-                  <option value="Full-time">Full-time</option>
-                  <option value="Part-time">Part-time</option>
-                  <option value="Contract">Contract</option>
-                  <option value="Internship">Internship</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Job Source</label>
-                <select
-                  value={addJobForm.source}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, source: e.target.value as JobSource }))}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none dark:border-zinc-700 dark:bg-zinc-900"
-                >
-                  <option value="linkedin">linkedin</option>
-                  <option value="indeed">indeed</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Apply URL</label>
-                <input
-                  value={addJobForm.applyUrl}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, applyUrl: e.target.value }))}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none ring-zinc-300 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Job Description</label>
-                <textarea
-                  value={addJobForm.jobDescription}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, jobDescription: e.target.value }))}
-                  className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm outline-none ring-zinc-300 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 min-h-[120px]"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500">Status</label>
-                <select
-                  value={addJobForm.status}
-                  onChange={(e) => setAddJobForm((current) => ({ ...current, status: e.target.value as JobStatus }))}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm outline-none dark:border-zinc-700 dark:bg-zinc-900"
-                >
-                  <option value="saved">saved</option>
-                  <option value="applied">applied</option>
-                  <option value="interviewing">interviewing</option>
-                  <option value="rejected">rejected</option>
-                  <option value="ghosted">ghosted</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  className="h-9 rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
-                  disabled={addJobLoading}
-                  onClick={() => {
-                    if (addJobLoading) return;
-                    setAddJobForm(EMPTY_FORM);
-                    setAddJobOpen(false);
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={addJobLoading}
-                  className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
-                >
-                  {addJobLoading ? "Adding..." : "Add Job"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <AddJobModal
+        open={addJobOpen}
+        onClose={() => setAddJobOpen(false)}
+        onJobAdded={mutate}
+      />
 
       {resumeOpen && (
         <div className="fixed inset-0 z-40 bg-black/45 p-3 md:p-8">
